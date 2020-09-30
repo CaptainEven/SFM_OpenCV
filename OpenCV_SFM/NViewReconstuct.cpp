@@ -243,7 +243,6 @@ int main(int argc, char** argv)
 	// ±£´æ
 	save_structure("../Viewer/structure.yml", rotations, motions, structure, colors);
 	cout << "Save structure done." << endl;
-	getchar();
 	
 	printf("Start bundle adjustment fo SFM...");
 	Mat intrinsic(Matx41d(K.at<double>(0, 0), K.at<double>(1, 1), K.at<double>(0, 2), K.at<double>(1, 2)));
@@ -261,6 +260,8 @@ int main(int argc, char** argv)
 	}
 
 	bundle_adjustment(intrinsic, extrinsics, correspond_struct_idx, key_points_for_all, structure);
+
+	getchar();
 
 	return 0;
 }
