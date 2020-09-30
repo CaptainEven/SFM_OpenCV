@@ -16,10 +16,10 @@ using namespace cv;
 // void getAllFiles(string path, vector<string>& files, string format);
 
 void init_structure(
-	Mat K,
-	vector<vector<KeyPoint>>& key_points_for_all,
-	vector<vector<Vec3b>>& colors_for_all,
-	vector<vector<DMatch>>& matches_for_all,
+	const Mat& K,
+	const vector<vector<KeyPoint>>& key_points_for_all,
+	const vector<vector<Vec3b>>& colors_for_all,
+	const vector<vector<DMatch>>& matches_for_all,
 	vector<Point3f>& structure,
 	vector<vector<int>>& correspond_struct_idx,
 	vector<Vec3b>& colors,
@@ -33,16 +33,16 @@ void get_matched_points(
 	vector<Point2f>& out_p1,
 	vector<Point2f>& out_p2);
 void get_matched_colors(
-	vector<Vec3b>& c1,
-	vector<Vec3b>& c2,
-	vector<DMatch> matches,
+	const vector<Vec3b>& c1,
+	const vector<Vec3b>& c2,
+	const vector<DMatch> matches,
 	vector<Vec3b>& out_c1,
 	vector<Vec3b>& out_c2
 );
-bool find_transform(Mat& K, vector<Point2f>& p1, vector<Point2f>& p2, Mat& R, Mat& T, Mat& mask);
+bool find_transform(const Mat& K, const vector<Point2f>& p1, const vector<Point2f>& p2, Mat& R, Mat& T, Mat& mask);
 void maskout_points(vector<Point2f>& p1, Mat& mask);
 void maskout_colors(vector<Vec3b>& p1, Mat& mask);
-void reconstruct(Mat& K, Mat& R1, Mat& T1, Mat& R2, Mat& T2, vector<Point2f>& p1, vector<Point2f>& p2, vector<Point3f>& structure);
+void reconstruct(const Mat& K, Mat& R1, Mat& T1, Mat& R2, Mat& T2, vector<Point2f>& p1, vector<Point2f>& p2, vector<Point3f>& structure);
 void get_objpoints_and_imgpoints(
 	vector<DMatch>& matches,
 	vector<int>& struct_indices,
@@ -336,10 +336,10 @@ void match_features(const Mat& query, const Mat& train, vector<DMatch>& matches)
 }
 
 void init_structure(
-	Mat K,
-	vector<vector<KeyPoint>>& key_points_for_all,
-	vector<vector<Vec3b>>& colors_for_all,
-	vector<vector<DMatch>>& matches_for_all,
+	const Mat& K,
+	const vector<vector<KeyPoint>>& key_points_for_all,
+	const vector<vector<Vec3b>>& colors_for_all,
+	const vector<vector<DMatch>>& matches_for_all,
 	vector<Point3f>& structure,
 	vector<vector<int>>& correspond_struct_idx,
 	vector<Vec3b>& colors,
@@ -379,7 +379,7 @@ void init_structure(
 
 	// 填写头两幅图像的结构索引
 	int idx = 0;
-	vector<DMatch>& matches = matches_for_all[0];
+	const vector<DMatch>& matches = matches_for_all[0];
 	for (int i = 0; i < matches.size(); ++i)
 	{
 		if (mask.at<uchar>(i) == 0)
@@ -410,9 +410,9 @@ void get_matched_points(
 }
 
 void get_matched_colors(
-	vector<Vec3b>& c1,
-	vector<Vec3b>& c2,
-	vector<DMatch> matches,
+	const vector<Vec3b>& c1,
+	const vector<Vec3b>& c2,
+	const vector<DMatch> matches,
 	vector<Vec3b>& out_c1,
 	vector<Vec3b>& out_c2
 )
@@ -426,14 +426,17 @@ void get_matched_colors(
 	}
 }
 
-bool find_transform(Mat& K, vector<Point2f>& p1, vector<Point2f>& p2, Mat& R, Mat& T, Mat& mask)
+bool find_transform(const Mat& K,
+	const vector<Point2f>& p1, const vector<Point2f>& p2,
+	Mat& R, Mat& T,
+	Mat& mask)
 {
-	// 根据内参数矩阵获取相机的焦距和光心坐标（主点坐标）
+	// 根据内参数矩阵获取相机的焦距和光心坐标(主点坐标)
 	double focal_length = 0.5 * (K.at<double>(0) + K.at<double>(4));
 	Point2d principle_point(K.at<double>(2), K.at<double>(5));
 
 	// 根据匹配点求取本征矩阵，使用RANSAC，进一步排除失配点
-	Mat E = findEssentialMat(p1, p2, focal_length, principle_point, RANSAC, 0.999, 1.0, mask);
+	const Mat& E = findEssentialMat(p1, p2, focal_length, principle_point, RANSAC, 0.999, 1.0, mask);
 	if (E.empty())
 	{
 		return false;
@@ -449,7 +452,7 @@ bool find_transform(Mat& K, vector<Point2f>& p1, vector<Point2f>& p2, Mat& R, Ma
 	}
 
 	// 分解本征矩阵，获取相对变换
-	int pass_count = recoverPose(E, p1, p2, R, T, focal_length, principle_point, mask);
+	int pass_count = cv::recoverPose(E, p1, p2, R, T, focal_length, principle_point, mask);
 
 	// cout << "pass_count = " << pass_count << endl;
 
@@ -489,7 +492,7 @@ void maskout_colors(vector<Vec3b>& p1, Mat& mask)
 	}
 }
 
-void reconstruct(Mat& K,
+void reconstruct(const Mat& K,
 	Mat& R1, Mat& T1, Mat& R2, Mat& T2,
 	vector<Point2f>& p1, vector<Point2f>& p2,
 	vector<Point3f>& structure)
