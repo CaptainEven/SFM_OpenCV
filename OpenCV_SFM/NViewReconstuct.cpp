@@ -242,9 +242,10 @@ int main(int argc, char** argv)
 
 	// ±£´æ
 	save_structure("../Viewer/structure.yml", rotations, motions, structure, colors);
-	cout << "Done." << endl;
+	cout << "Save structure done." << endl;
 	getchar();
-
+	
+	printf("Start bundle adjustment fo SFM...");
 	Mat intrinsic(Matx41d(K.at<double>(0, 0), K.at<double>(1, 1), K.at<double>(0, 2), K.at<double>(1, 2)));
 	vector<Mat> extrinsics;
 	for (size_t i = 0; i < rotations.size(); ++i)
@@ -663,8 +664,10 @@ void bundle_adjustment(
 	// load intrinsic
 	problem.AddParameterBlock(intrinsic.ptr<double>(), 4); // fx, fy, cx, cy
 
+	// loss function make bundle adjustment robuster.
+	ceres::LossFunction* loss_function = new ceres::HuberLoss(4);  
+
 	// load points
-	ceres::LossFunction* loss_function = new ceres::HuberLoss(4);  // loss function make bundle adjustment robuster.
 	for (size_t img_idx = 0; img_idx < correspond_struct_idx.size(); ++img_idx)
 	{
 		vector<int>& point3d_ids = correspond_struct_idx[img_idx];
