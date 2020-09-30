@@ -27,9 +27,9 @@ void init_structure(
 	vector<Mat>& motions
 );
 void get_matched_points(
-	vector<KeyPoint>& p1,
-	vector<KeyPoint>& p2,
-	vector<DMatch> matches,
+	const vector<KeyPoint>& p1,
+	const vector<KeyPoint>& p2,
+	const vector<DMatch> matches,
 	vector<Point2f>& out_p1,
 	vector<Point2f>& out_p2);
 void get_matched_colors(
@@ -64,11 +64,11 @@ void extract_features(
 	vector<Mat>& descriptor_for_all,
 	vector <vector<Vec3b>>& colors_for_all
 );
-void match_features(Mat& query, Mat& train, vector<DMatch>& matches);
-void match_features(vector<Mat>& descriptor_for_all, vector<vector<DMatch>>& matches_for_all);
+void match_features(const Mat& query, const Mat& train, vector<DMatch>& matches);
+void match_features(const vector<Mat>& descriptor_for_all, vector<vector<DMatch>>& matches_for_all);
 void save_structure(string file_name, vector<Mat>& rotations, vector<Mat>& motions, vector<Point3f>& structure, vector<Vec3b>& colors);
 
-string dir = "../Images/";
+const string dir = "../Images/";
 
 int main(int argc, char** argv)
 {
@@ -104,7 +104,7 @@ int main(int argc, char** argv)
 
 	vector<Point3f> structure;
 	vector<vector<int>> correspond_struct_idx;	// 保存第i副图像中第j特征点对应的structure中点的索引
-	vector<Vec3b> colors;
+	vector<Vec3b> colors;  // 3个字节表示一个RGB或BGR颜色
 	vector<Mat> rotations;
 	vector<Mat> motions;
 
@@ -229,14 +229,15 @@ void extract_features(
 {
 	key_points_for_all.clear();
 	descriptor_for_all.clear();
-	Mat image;
+	Mat img;
 
 	// 读取图像，获取图像特征点并保存
 	Ptr<Feature2D> sift = cv::SIFT::create();
 	for (auto it = image_names.begin(); it != image_names.end(); ++it)
-	{
-		image = imread(*it);
-		if (image.empty())
+	{	
+		// 读取图像
+		img = imread(*it);
+		if (img.empty())
 		{
 			continue;
 		}
@@ -247,8 +248,8 @@ void extract_features(
 
 		// 偶尔出现内存分配失败的错误  Detects keypoints and computes the descriptors
 		// sift->detectAndCompute(image, noArray(), key_points, descriptor);
-		sift->detect(image, key_points);
-		sift->compute(image, key_points, descriptor);
+		sift->detect(img, key_points);
+		sift->compute(img, key_points, descriptor);
 
 		// 特征点过少，则排除该图像
 		if (key_points.size() <= 10)
@@ -259,19 +260,28 @@ void extract_features(
 		key_points_for_all.push_back(key_points);
 		descriptor_for_all.push_back(descriptor);
 
-		vector<Vec3b> colors(key_points.size());	// 三通道 存放该位置三通道颜色
+		// 三通道 存放该位置三通道颜色
+		vector<Vec3b> colors(key_points.size());	
 		for (int i = 0; i < key_points.size(); ++i)
 		{
-			Point2f& p = key_points[i].pt;
-			if (p.x <= image.rows && p.y <= image.cols)
-				colors[i] = image.at<Vec3b>(p.x, p.y);
+			Point2f& kp = key_points[i].pt;
+			const int& y = int(kp.y);
+			const int& x = int(kp.x);
+			if (y <= img.rows && x <= img.cols)
+			{
+				colors[i] = img.at<Vec3b>(y, x);
+			}
+			else
+			{
+				printf("[Warning]: pt2d[%d, %d] out of image range.\n", kp.x, kp.y);
+			}
 		}
 
 		colors_for_all.push_back(colors);
 	}
 }
 
-void match_features(vector<Mat>& descriptor_for_all, vector<vector<DMatch>>& matches_for_all)
+void match_features(const vector<Mat>& descriptor_for_all, vector<vector<DMatch>>& matches_for_all)
 {
 	matches_for_all.clear();
 	// n个图像，两两顺次有 n-1 对匹配
@@ -285,7 +295,7 @@ void match_features(vector<Mat>& descriptor_for_all, vector<vector<DMatch>>& mat
 	}
 }
 
-void match_features(Mat& query, Mat& train, vector<DMatch>& matches)
+void match_features(const Mat& query, const Mat& train, vector<DMatch>& matches)
 {
 	vector<vector<DMatch>> knn_matches;
 	BFMatcher matcher(NORM_L2);
@@ -337,7 +347,7 @@ void init_structure(
 	vector<Mat>& motions
 )
 {
-	// 计算头两幅图像之间的变换矩阵
+	// 计算前两帧(编号0和1)图像之间的变换矩阵
 	vector<Point2f> p1, p2;
 	vector<Vec3b> c2;
 	Mat R, T;	// 旋转矩阵和平移向量
@@ -353,7 +363,8 @@ void init_structure(
 
 	Mat R0 = Mat::eye(3, 3, CV_64FC1);
 	Mat T0 = Mat::zeros(3, 1, CV_64FC1);
-	reconstruct(K, R0, T0, R, T, p1, p2, structure);	// 三角化
+	reconstruct(K, R0, T0, R, T, p1, p2, structure);  // 三角化
+
 	// 保存变换矩阵
 	rotations = { R0, R };
 	motions = { T0, T };
@@ -383,9 +394,9 @@ void init_structure(
 }
 
 void get_matched_points(
-	vector<KeyPoint>& p1,
-	vector<KeyPoint>& p2,
-	vector<DMatch> matches,
+	const vector<KeyPoint>& p1,
+	const vector<KeyPoint>& p2,
+	const vector<DMatch> matches,
 	vector<Point2f>& out_p1,
 	vector<Point2f>& out_p2)
 {
@@ -478,7 +489,7 @@ void maskout_colors(vector<Vec3b>& p1, Mat& mask)
 	}
 }
 
-void reconstruct(Mat& K, 
+void reconstruct(Mat& K,
 	Mat& R1, Mat& T1, Mat& R2, Mat& T2,
 	vector<Point2f>& p1, vector<Point2f>& p2,
 	vector<Point3f>& structure)
@@ -537,7 +548,7 @@ void get_objpoints_and_imgpoints(
 		}
 
 		object_points.push_back(structure[struct_idx]);
-		image_points.push_back(key_points[train_idx].pt);	// train中对应关键点的坐标 二维
+		image_points.push_back(key_points[train_idx].pt);  // train中对应关键点的坐标 二维
 	}
 }
 
