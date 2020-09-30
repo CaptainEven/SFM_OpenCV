@@ -244,7 +244,7 @@ int main(int argc, char** argv)
 	save_structure("../Viewer/structure.yml", rotations, motions, structure, colors);
 	cout << "Save structure done." << endl;
 	
-	printf("Start bundle adjustment fo SFM...");
+	printf("\nStart bundle adjustment fo SFM...\n");
 	Mat intrinsic(Matx41d(K.at<double>(0, 0), K.at<double>(1, 1), K.at<double>(0, 2), K.at<double>(1, 2)));
 	vector<Mat> extrinsics;
 	for (size_t i = 0; i < rotations.size(); ++i)
