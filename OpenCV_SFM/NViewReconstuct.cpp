@@ -457,7 +457,7 @@ void init_structure(
 
 	Mat R0 = Mat::eye(3, 3, CV_64FC1);
 	Mat T0 = Mat::zeros(3, 1, CV_64FC1);
-	reconstruct(K, R0, T0, R, T, p1, p2, structure);  // 三角化
+	reconstruct(K, R0, T0, R, T, p1, p2, structure);  // 前两帧三角化
 
 	// 保存变换矩阵
 	rotations = { R0, R };
@@ -609,7 +609,7 @@ void maskout_colors(const Mat& mask, vector<Vec3b>& pts_color)
 
 void reconstruct(const Mat& K,
 	Mat& R1, Mat& T1, Mat& R2, Mat& T2,
-	vector<Point2f>& p1, vector<Point2f>& p2,
+	vector<Point2f>& pts2d_1, vector<Point2f>& pts2d_2,
 	vector<Point3d>& structure)
 {
 	// 两个相机的投影矩阵[R, T], triangulatePoints只支持float型
@@ -631,14 +631,14 @@ void reconstruct(const Mat& K,
 
 	// 三角测量重建3D坐标
 	cv::Mat pts4d;
-	cv::triangulatePoints(proj1, proj2, p1, p2, pts4d);
+	cv::triangulatePoints(proj1, proj2, pts2d_1, pts2d_2, pts4d);
 
 	structure.clear();
 	structure.reserve(pts4d.cols);
 	for (int i = 0; i < pts4d.cols; ++i)
 	{
 		Mat_<float> col = pts4d.col(i);
-		col /= col(3);	// 齐次坐标
+		col /= col(3);	// 齐次坐标———>非齐次坐标
 		structure.push_back(Point3f(col(0), col(1), col(2)));
 	}
 }
