@@ -63,14 +63,14 @@ void reconstruct(const Mat& K,
 	vector<Point2f>& p1, vector<Point2f>& p2,
 	vector<Point3d>& structure);
 void get_objpoints_and_imgpoints(
-	vector<DMatch>& matches,
-	vector<int>& struct_indices,
-	vector<Point3d>& structure,
-	vector<KeyPoint>& key_points,
+	const vector<DMatch>& matches,
+	const vector<int>& struct_indices,
+	const vector<Point3d>& structure,
+	const vector<KeyPoint>& key_points,
 	vector<Point3f>& object_points,
 	vector<Point2f>& image_points);
-void fusion_structure(
-	vector<DMatch>& matches,
+void fuse_structure(
+	const vector<DMatch>& matches,
 	vector<int>& struct_indices,
 	vector<int>& next_struct_indices,
 	vector<Point3d>& structure,
@@ -94,27 +94,29 @@ void save_structure(string file_name,
 // --------------------
 struct ReprojectCost
 {
-	cv::Point2d observation;
+	cv::Point2d m_observation;
 
 	ReprojectCost(cv::Point2d& observation)
-		: observation(observation)
+		: m_observation(observation)
 	{
 	}
 
 	template <typename T>
-	bool operator()(const T* const intrinsic, const T* const extrinsic, const T* const pos3d, T* residuals) const
+	bool operator()(const T* const intrinsic, const T* const extrinsic, const T* const pt3d, T* residuals) const
 	{
-		const T* r = extrinsic;
-		const T* t = &extrinsic[3];
+		const T* r = extrinsic;  // 旋转向量指针
+		const T* t = &extrinsic[3];  // 平移向量指针
 
+		// Apply rotation: from world to camera
 		T pos_proj[3];
-		ceres::AngleAxisRotatePoint(r, pos3d, pos_proj);
+		ceres::AngleAxisRotatePoint(r, pt3d, pos_proj);
 
 		// Apply the camera translation
 		pos_proj[0] += t[0];
 		pos_proj[1] += t[1];
 		pos_proj[2] += t[2];
 
+		// Convert to normalized coordinates in camera coordinate system
 		const T x = pos_proj[0] / pos_proj[2];
 		const T y = pos_proj[1] / pos_proj[2];
 
@@ -123,12 +125,12 @@ struct ReprojectCost
 		const T cx = intrinsic[2];
 		const T cy = intrinsic[3];
 
-		// Apply intrinsic
+		// Apply intrinsic: convert to pixel coordinate system
 		const T u = fx * x + cx;
 		const T v = fy * y + cy;
 
-		residuals[0] = u - T(observation.x);
-		residuals[1] = v - T(observation.y);
+		residuals[0] = u - T(m_observation.x);
+		residuals[1] = v - T(m_observation.y);
 
 		return true;
 	}
@@ -159,107 +161,123 @@ int main(int argc, char** argv)
 		0, 2764.16, 1006.81,
 		0, 0, 1));
 
-	vector<vector<cv::KeyPoint>> key_points_for_all;
+	vector<vector<cv::KeyPoint>> kpts_for_all;
 	vector<Mat> descriptor_for_all;
 	vector<vector<Vec3b>> colors_for_all;
 	vector<vector<DMatch>> matches_for_all;
 
 	// 提取所有图像的特征
-	extract_features(img_names, key_points_for_all, descriptor_for_all, colors_for_all);
+	extract_features(img_names, kpts_for_all, descriptor_for_all, colors_for_all);
 
 	// 对所有图像进行顺次的特征匹配
 	match_features(descriptor_for_all, matches_for_all);
 
 	vector<Point3d> structure;
-	vector<vector<int>> correspond_struct_idx;	// 保存第i副图像中第j特征点对应的structure中点的索引
+	vector<vector<int>> correspond_struct_idx;	// 保存第i副图像中第j特征点对应的structure中3D点的索引
 	vector<Vec3b> colors;  // 3个字节表示一个RGB或BGR颜色
-	vector<Mat> rotations;
-	vector<Mat> motions;
+	vector<Mat> rotations;  // 旋转矩阵数组
+	vector<Mat> translations;  // 平移向量数组
 
 	// 初始化结构（三维点云） 前两帧
+	printf("\nConstruct from the first two frames...\n");
 	init_structure(
 		K,
-		key_points_for_all,
+		kpts_for_all,
 		colors_for_all,
 		matches_for_all,
 		structure,
 		correspond_struct_idx,
 		colors,
 		rotations,
-		motions
+		translations
 	);
 
 	// 增量方式重建剩余的图像
 	printf("\nIncremental SFM...\n");
-	for (int i = 1; i < matches_for_all.size(); ++i)
+	for (int i = 1; i < matches_for_all.size(); ++i)  // 遍历剩余匹配
 	{
-		vector<Point3f> object_points;
-		vector<Point2f> image_points;
+		vector<Point3f> obj_pts;  // 3D点
+		vector<Point2f> img_pts;  // 2D点
 		Mat r, R, T;
 
 		// 获取第i副图像中匹配点对应的三维点，以及在第i+1副图像中对应的像素点
 		get_objpoints_and_imgpoints(
-			matches_for_all[i],
+			matches_for_all[i],  // 第i个匹配: 第i帧和第i+1帧的匹配
 			correspond_struct_idx[i],
 			structure,
-			key_points_for_all[i + 1],
-			object_points,
-			image_points
+			kpts_for_all[i + 1],
+			obj_pts,
+			img_pts
 		);
 
-		// 求解变换矩阵
-		cv::solvePnPRansac(object_points, image_points, K, noArray(), r, T);
+		// 求解当前帧(第i+1帧)的变换矩阵[R|T]
+		cv::solvePnPRansac(obj_pts, img_pts, K, cv::noArray(), r, T);
 
 		// 将旋转向量转换为旋转矩阵
-		cv::Rodrigues(r, R);
+		cv::Rodrigues(r, R);  // CV提供用于旋转向量与旋转矩阵相互转换的函数
 
-		// 保存变换矩阵
-		rotations.push_back(R);
-		motions.push_back(T);
+		// 保存当前帧的变换矩阵
+		rotations.push_back(R);  // 第i+1帧的旋转矩阵
+		translations.push_back(T);  // 第i+1帧的平移向量
 
-		vector<Point2f> p1, p2;
-		vector<Vec3b> c1, c2;
-		get_matched_points(key_points_for_all[i], key_points_for_all[i + 1], matches_for_all[i], p1, p2);
-		get_matched_colors(colors_for_all[i], colors_for_all[i + 1], matches_for_all[i], c1, c2);
+		// 获取第i帧和第i+1帧的匹配特征点
+		vector<Point2f> pts2d_1, pts2d_2;
+		vector<Vec3b> colors_1, colors_2;
+		get_matched_points(kpts_for_all[i],
+			kpts_for_all[i + 1], 
+			matches_for_all[i], 
+			pts2d_1, pts2d_2);
+		get_matched_colors(colors_for_all[i],
+			colors_for_all[i + 1],
+			matches_for_all[i],
+			colors_1, colors_2);
 
 		// 根据之前求得的R, T进行三维重建
 		vector<Point3d> next_structure;
-		reconstruct(K, rotations[i], motions[i], R, T, p1, p2, next_structure);
+		reconstruct(K, rotations[i], translations[i], R, T, pts2d_1, pts2d_2, next_structure);
 		printf("Frame %d reconstructed.\n", i);
 
 		//将新的重建结果与之前的融合
-		fusion_structure(
+		fuse_structure(
 			matches_for_all[i],
 			correspond_struct_idx[i],
 			correspond_struct_idx[i + 1],
 			structure,
 			next_structure,
 			colors,
-			c1
+			colors_1
 		);
 		printf("Frame %d point cloud fused.\n", i);
 	}
 
-	// 保存
-	save_structure("../Viewer/structure.yml", rotations, motions, structure, colors);
+	// 保存优化前的结果
+	save_structure("../Viewer/structure.yml", rotations, translations, structure, colors);
 	cout << "Save structure done." << endl;
 	
-	printf("\nStart bundle adjustment fo SFM...\n");
+	// 捆绑调整
+	printf("\nBundle adjustment fo SFM...\n");
 	Mat intrinsic(Matx41d(K.at<double>(0, 0), K.at<double>(1, 1), K.at<double>(0, 2), K.at<double>(1, 2)));
-	vector<Mat> extrinsics;
+	cout << "intrinsic:\n" << intrinsic << endl;
+	vector<Mat> extrinsics;  // 外参向量数组
 	for (size_t i = 0; i < rotations.size(); ++i)
 	{
 		Mat extrinsic(6, 1, CV_64FC1);
 		Mat r;
 		Rodrigues(rotations[i], r);
 
-		r.copyTo(extrinsic.rowRange(0, 3));
-		motions[i].copyTo(extrinsic.rowRange(3, 6));
+		r.copyTo(extrinsic.rowRange(0, 3));  // 前三项是旋转向量
+		translations[i].copyTo(extrinsic.rowRange(3, 6));  // 后三项是平移向量
 
+		// 添加外参向量
 		extrinsics.push_back(extrinsic);
 	}
 
-	bundle_adjustment(intrinsic, extrinsics, correspond_struct_idx, key_points_for_all, structure);
+	// do bundle adjustment
+	bundle_adjustment(intrinsic, extrinsics, correspond_struct_idx, kpts_for_all, structure);
+
+	// 保存优化后的结果
+	save_structure("../Viewer/structure_ba.yml", rotations, translations, structure, colors);
+	cout << "Save structure done." << endl;
 
 	getchar();
 
@@ -427,7 +445,7 @@ void match_features(const Mat& query, const Mat& train, vector<DMatch>& matches)
 
 void init_structure(
 	const Mat& K,
-	const vector<vector<KeyPoint>>& key_points_for_all,
+	const vector<vector<KeyPoint>>& key_points_for_all,  // 每一帧提取的特征点
 	const vector<vector<Vec3b>>& colors_for_all,
 	const vector<vector<DMatch>>& matches_for_all,
 	vector<Point3d>& structure,
@@ -455,36 +473,41 @@ void init_structure(
 	maskout_2d_pts_pair(mask, p1, p2);
 	maskout_colors(mask, colors);
 
+	// 前两帧三角化
 	Mat R0 = Mat::eye(3, 3, CV_64FC1);
 	Mat T0 = Mat::zeros(3, 1, CV_64FC1);
-	reconstruct(K, R0, T0, R, T, p1, p2, structure);  // 前两帧三角化
+	reconstruct(K, R0, T0, R, T, p1, p2, structure);  
 
 	// 保存变换矩阵
 	rotations = { R0, R };
 	motions = { T0, T };
 
 	// 将correspond_struct_idx的大小初始化为与key_points_for_all完全一致
-	correspond_struct_idx.clear();
-	correspond_struct_idx.resize(key_points_for_all.size());
-	for (int i = 0; i < key_points_for_all.size(); ++i)
+	correspond_struct_idx.clear();  // 通过keypoint索引3D点的索引
+	correspond_struct_idx.resize(key_points_for_all.size());  // N frames
+	for (size_t fr_i = 0; fr_i < key_points_for_all.size(); ++fr_i)
 	{
-		correspond_struct_idx[i].resize(key_points_for_all[i].size(), -1);
+		// 初始化为-1
+		correspond_struct_idx[fr_i].resize(key_points_for_all[fr_i].size(), -1);
 	}
 
-	// 填写头两幅图像的结构索引
+	// 填写前两帧的结构索引
+	const vector<DMatch>& matches = matches_for_all[0];  //total (N-1) matches for N frames
+
 	int idx = 0;
-	const vector<DMatch>& matches = matches_for_all[0];
 	for (int i = 0; i < matches.size(); ++i)
 	{
 		if (mask.at<uchar>(i) == 0)
 		{
 			continue;
 		}
-
-		correspond_struct_idx[0][matches[i].queryIdx] = idx;	// 如果两个点对应的idx 相等 表明它们是同一特征点 idx 就是structure中对应的空间点坐标索引
+		
+		// 如果两个点对应的idx相等,表明它们是同一特征点 idx 就是structure中对应的空间点坐标索引
+		correspond_struct_idx[0][matches[i].queryIdx] = idx;  
 		correspond_struct_idx[1][matches[i].trainIdx] = idx;
 		++idx;
 	}
+	printf("Total %d 3D points from the first two frames' valid keypoint matches.\n", idx);
 }
 
 void get_matched_points(
@@ -612,34 +635,34 @@ void reconstruct(const Mat& K,
 	vector<Point2f>& pts2d_1, vector<Point2f>& pts2d_2,
 	vector<Point3d>& structure)
 {
-	// 两个相机的投影矩阵[R, T], triangulatePoints只支持float型
-	Mat proj1(3, 4, CV_32FC1);
-	Mat proj2(3, 4, CV_32FC1);
+	// 两个相机的投影矩阵[R, T], triangulatePoints只支持float/double型
+	Mat proj_1(3, 4, CV_32FC1);
+	Mat proj_2(3, 4, CV_32FC1);
 
-	R1.convertTo(proj1(Range(0, 3), Range(0, 3)), CV_32FC1);
-	//T1.convertTo(proj2(Range(0, 3), Range(3, 4)), CV_32FC1);
-	T1.convertTo(proj1.col(3), CV_32FC1);
+	R1.convertTo(proj_1(Range(0, 3), Range(0, 3)), CV_32FC1);  // Range: [start, end)
+	//T1.convertTo(proj_2(Range(0, 3), Range(3, 4)), CV_32FC1);
+	T1.convertTo(proj_1.col(3), CV_32FC1);
 
-	R2.convertTo(proj2(Range(0, 3), Range(0, 3)), CV_32FC1);
-	//T2.convertTo(proj2(Range(0, 3), Range(3, 4)), CV_32FC1);
-	T2.convertTo(proj2.col(3), CV_32FC1);
+	R2.convertTo(proj_2(Range(0, 3), Range(0, 3)), CV_32FC1);
+	//T2.convertTo(proj_2(Range(0, 3), Range(3, 4)), CV_32FC1);
+	T2.convertTo(proj_2.col(3), CV_32FC1);  // [R|T]
 
 	Mat fK;
 	K.convertTo(fK, CV_32FC1);
-	proj1 = fK * proj1;
-	proj2 = fK * proj2;
+	proj_1 = fK * proj_1;
+	proj_2 = fK * proj_2;
 
 	// 三角测量重建3D坐标
-	cv::Mat pts4d;
-	cv::triangulatePoints(proj1, proj2, pts2d_1, pts2d_2, pts4d);
+	cv::Mat pts4d;  // 4×N:每列一个3D点齐次坐标(4维)
+	cv::triangulatePoints(proj_1, proj_2, pts2d_1, pts2d_2, pts4d);
 
 	structure.clear();
-	structure.reserve(pts4d.cols);
+	structure.reserve(pts4d.cols);  // 预先分配好内存, 避免内存多次分配
 	for (int i = 0; i < pts4d.cols; ++i)
 	{
-		Mat_<float> col = pts4d.col(i);
-		col /= col(3);	// 齐次坐标———>非齐次坐标
-		structure.push_back(Point3f(col(0), col(1), col(2)));
+		const Mat_<float>& pt3d_homo = pts4d.col(i);
+		pt3d_homo /= pt3d_homo(3);	// 齐次坐标———>非齐次坐标
+		structure.push_back(Point3f(pt3d_homo(0), pt3d_homo(1), pt3d_homo(2)));
 	}
 }
 
@@ -677,7 +700,9 @@ void bundle_adjustment(
 		{
 			int point3d_id = point3d_ids[point_idx];
 			if (point3d_id < 0)
+			{
 				continue;
+			}
 
 			Point2d observed = key_points[point_idx].pt;
 
@@ -698,7 +723,7 @@ void bundle_adjustment(
 	ceres::Solver::Options ceres_config_options;
 	ceres_config_options.minimizer_progress_to_stdout = false;
 	ceres_config_options.logging_type = ceres::SILENT;
-	ceres_config_options.num_threads = 1;
+	ceres_config_options.num_threads = 4;  //启动四个线程
 	ceres_config_options.preconditioner_type = ceres::JACOBI;
 	ceres_config_options.linear_solver_type = ceres::SPARSE_SCHUR;
 	ceres_config_options.sparse_linear_algebra_library_type = ceres::EIGEN_SPARSE;
@@ -725,10 +750,10 @@ void bundle_adjustment(
 }
 
 void get_objpoints_and_imgpoints(
-	vector<DMatch>& matches,
-	vector<int>& struct_indices,
-	vector<Point3d>& structure,
-	vector<KeyPoint>& key_points,
+	const vector<DMatch>& matches,  // matches for this frame
+	const vector<int>& struct_indices,  // struct indices for keypoints of this frame
+	const vector<Point3d>& structure,
+	const vector<KeyPoint>& key_points,
 	vector<Point3f>& object_points,
 	vector<Point2f>& image_points)
 {
@@ -737,10 +762,10 @@ void get_objpoints_and_imgpoints(
 
 	for (int i = 0; i < matches.size(); ++i)
 	{
-		int query_idx = matches[i].queryIdx;
-		int train_idx = matches[i].trainIdx;
+		const int& query_idx = matches[i].queryIdx;
+		const int& train_idx = matches[i].trainIdx;
 
-		int struct_idx = struct_indices[query_idx];
+		const int& struct_idx = struct_indices[query_idx];
 		if (struct_idx < 0)	// 表明跟前一副图像没有匹配点
 		{
 			continue;
@@ -751,8 +776,8 @@ void get_objpoints_and_imgpoints(
 	}
 }
 
-void fusion_structure(
-	vector<DMatch>& matches,
+void fuse_structure(
+	const vector<DMatch>& matches,
 	vector<int>& struct_indices,
 	vector<int>& next_struct_indices,
 	vector<Point3d>& structure,
@@ -762,11 +787,11 @@ void fusion_structure(
 {
 	for (int i = 0; i < matches.size(); ++i)
 	{
-		int query_idx = matches[i].queryIdx;
-		int train_idx = matches[i].trainIdx;
+		const int& query_idx = matches[i].queryIdx;
+		const int& train_idx = matches[i].trainIdx;
 
-		int struct_idx = struct_indices[query_idx];
-		if (struct_idx >= 0)	// 若该点在空间中已经存在，则这对匹配点对应的空间点应该是同一个，索引要相同
+		const int& struct_idx = struct_indices[query_idx];
+		if (struct_idx >= 0)  // 若该点在空间中已经存在，则这对匹配点对应的空间点应该是同一个，索引要相同
 		{
 			next_struct_indices[train_idx] = struct_idx;
 			continue;
