@@ -17,9 +17,10 @@ using namespace std;
 using namespace cv;
 
 // --------------------
-// void getAllFiles(string path, vector<string>& files, string format);
+int getAllFiles(const string& path, const string& format, vector<string>& files);
 
-void init_structure(
+
+int init_structure(
 	const Mat& K,
 	const vector<vector<KeyPoint>>& key_points_for_all,
 	const vector<vector<Vec3b>>& colors_for_all,
@@ -58,7 +59,7 @@ void bundle_adjustment(
 	vector<Point3d>& structure
 );
 
-void reconstruct(const Mat& K,
+int reconstruct(const Mat& K,
 	Mat& R1, Mat& T1, Mat& R2, Mat& T2,
 	vector<Point2f>& p1, vector<Point2f>& p2,
 	vector<Point3d>& structure);
@@ -92,6 +93,7 @@ void save_structure(string file_name,
 	vector<Vec3b>& colors);
 
 // --------------------
+
 struct ReprojectCost
 {
 	cv::Point2d m_observation;
@@ -138,28 +140,47 @@ struct ReprojectCost
 
 // --------------------
 
-const string dir = "../Images/";
+const string img_dir = "../Images/";
 
 int main(int argc, char** argv)
 {
 	vector<string> img_names;
-	img_names.push_back(dir + "0000.png");
-	img_names.push_back(dir + "0001.png");
-	img_names.push_back(dir + "0002.png");
-	img_names.push_back(dir + "0003.png");
-	img_names.push_back(dir + "0004.png");
-	img_names.push_back(dir + "0005.png");
-	img_names.push_back(dir + "0006.png");
-	img_names.push_back(dir + "0007.png");
-	img_names.push_back(dir + "0008.png");
-	img_names.push_back(dir + "0009.png");
-	img_names.push_back(dir + "0010.png");
+
+	if (argc != 2)
+	{
+		cout << "Usage: Image directory path to SFM reconstruction." << endl;
+		cout << "Using default image directory path.";
+
+		img_names.push_back(img_dir + "0000.png");
+		img_names.push_back(img_dir + "0001.png");
+		img_names.push_back(img_dir + "0002.png");
+		img_names.push_back(img_dir + "0003.png");
+		img_names.push_back(img_dir + "0004.png");
+		img_names.push_back(img_dir + "0005.png");
+		img_names.push_back(img_dir + "0006.png");
+		img_names.push_back(img_dir + "0007.png");
+		img_names.push_back(img_dir + "0008.png");
+		img_names.push_back(img_dir + "0009.png");
+		img_names.push_back(img_dir + "0010.png");
+
+		//return -1;
+	}
+	const std::string img_dir = std::string(argv[1]);
+	const string format = std::string(".jpg");
+	const int N_files = getAllFiles(img_dir, format, img_names);
+	printf("Total %d image files.\n", N_files);
 
 	// 相机内参家矩阵
+	//Mat K(Matx33d(
+	//	2759.48, 0, 1520.69,
+	//	0, 2764.16, 1006.81,
+	//	0, 0, 1));
 	Mat K(Matx33d(
-		2759.48, 0, 1520.69,
-		0, 2764.16, 1006.81,
+		1802.0, 0, 540.0,
+		0, 1802.0, 960.0,
 		0, 0, 1));
+
+	// TODO: 如何读取图片metadata, 并构建相机内参矩阵K
 
 	vector<vector<cv::KeyPoint>> kpts_for_all;
 	vector<Mat> descriptor_for_all;
@@ -180,7 +201,7 @@ int main(int argc, char** argv)
 
 	// 初始化结构（三维点云） 前两帧
 	printf("\nConstruct from the first two frames...\n");
-	init_structure(
+	const int ret = init_structure(
 		K,
 		kpts_for_all,
 		colors_for_all,
@@ -210,8 +231,13 @@ int main(int argc, char** argv)
 			img_pts
 		);
 
-		// 求解当前帧(第i+1帧)的变换矩阵[R|T]
-		cv::solvePnPRansac(obj_pts, img_pts, K, cv::noArray(), r, T);
+		// 求解当前帧(第i+1帧)的相机位姿(变换矩阵[R|T])
+		if (obj_pts.size() < 4 || img_pts.size() < 4)
+		{
+			printf("[Warning]: too few 3D-2D point pairs for frame %d.\n", i);
+			continue;
+		}
+		const bool& ret = cv::solvePnPRansac(obj_pts, img_pts, K, cv::noArray(), r, T);
 
 		// 将旋转向量转换为旋转矩阵
 		cv::Rodrigues(r, R);  // CV提供用于旋转向量与旋转矩阵相互转换的函数
@@ -237,7 +263,7 @@ int main(int argc, char** argv)
 		reconstruct(K, rotations[i], translations[i], R, T, pts2d_1, pts2d_2, next_structure);
 		printf("Frame %d reconstructed.\n", i);
 
-		//将新的重建结果与之前的融合
+		//将新的重建3D点云与已经重建的3D点云进行融合
 		fuse_structure(
 			matches_for_all[i],
 			correspond_struct_idx[i],
@@ -399,6 +425,10 @@ void match_features(const vector<Mat>& descriptor_for_all, vector<vector<DMatch>
 		cout << "Matching images " << i << " - " << i + 1 << endl;
 		vector<DMatch> matches;
 		match_features(descriptor_for_all[i], descriptor_for_all[i + 1], matches);
+		if (matches.size() == 0)
+		{
+			printf("[Warning]: zero matches between %d and %d.\n", i, i + 1);
+		}
 		matches_for_all.push_back(matches);
 	}
 }
@@ -443,7 +473,7 @@ void match_features(const Mat& query, const Mat& train, vector<DMatch>& matches)
 	}
 }
 
-void init_structure(
+int init_structure(
 	const Mat& K,
 	const vector<vector<KeyPoint>>& key_points_for_all,  // 每一帧提取的特征点
 	const vector<vector<Vec3b>>& colors_for_all,
@@ -456,27 +486,31 @@ void init_structure(
 )
 {
 	// 计算前两帧(编号0和1)图像之间的变换矩阵
-	vector<Point2f> p1, p2;
+	vector<Point2f> pts2d_1, pts2d_2;
 	vector<Vec3b> c2;
 	Mat R, T;	// 旋转矩阵和平移向量
 	Mat mask;	// mask中大于零的点代表匹配点，等于零的点代表失配点
-	get_matched_points(key_points_for_all[0], key_points_for_all[1], matches_for_all[0], p1, p2);
+	get_matched_points(key_points_for_all[0], key_points_for_all[1], matches_for_all[0], pts2d_1, pts2d_2);
 	get_matched_colors(colors_for_all[0], colors_for_all[1], matches_for_all[0], colors, c2);
 
 	// 根据匹配的特征点计算本质矩阵并分解得到R,T矩阵
-	find_transform(K, p1, p2, R, T, mask);
+	find_transform(K, pts2d_1, pts2d_2, R, T, mask);
 	//printf("mask type: %d\n", mask.type());  // mask: CV_8U(uint8)
 
 	// 对头两幅图像进行三维重建
 	//maskout_points(mask, p1);
 	//maskout_points(mask, p2);
-	maskout_2d_pts_pair(mask, p1, p2);
+	maskout_2d_pts_pair(mask, pts2d_1, pts2d_2);
 	maskout_colors(mask, colors);
 
 	// 前两帧三角化
 	Mat R0 = Mat::eye(3, 3, CV_64FC1);
 	Mat T0 = Mat::zeros(3, 1, CV_64FC1);
-	reconstruct(K, R0, T0, R, T, p1, p2, structure);  
+	const int ret = reconstruct(K, R0, T0, R, T, pts2d_1, pts2d_2, structure);
+	if (ret < 0)
+	{
+		return ret;
+	}
 
 	// 保存变换矩阵
 	rotations = { R0, R };
@@ -507,7 +541,9 @@ void init_structure(
 		correspond_struct_idx[1][matches[i].trainIdx] = idx;
 		++idx;
 	}
+
 	printf("Total %d 3D points from the first two frames' valid keypoint matches.\n", idx);
+	return 0;
 }
 
 void get_matched_points(
@@ -630,11 +666,17 @@ void maskout_colors(const Mat& mask, vector<Vec3b>& pts_color)
 	}
 }
 
-void reconstruct(const Mat& K,
+int reconstruct(const Mat& K,
 	Mat& R1, Mat& T1, Mat& R2, Mat& T2,
 	vector<Point2f>& pts2d_1, vector<Point2f>& pts2d_2,
 	vector<Point3d>& structure)
 {
+	if (pts2d_1.size() == 0 || pts2d_2.size() == 0)
+	{
+		printf("[Err]: empty 2d points.\n");
+		return -1;
+	}
+
 	// 两个相机的投影矩阵[R, T], triangulatePoints只支持float/double型
 	Mat proj_1(3, 4, CV_32FC1);
 	Mat proj_2(3, 4, CV_32FC1);
@@ -664,6 +706,7 @@ void reconstruct(const Mat& K,
 		pt3d_homo /= pt3d_homo(3);	// 齐次坐标———>非齐次坐标
 		structure.push_back(Point3f(pt3d_homo(0), pt3d_homo(1), pt3d_homo(2)));
 	}
+	return 0;
 }
 
 void bundle_adjustment(
@@ -805,28 +848,30 @@ void fuse_structure(
 }
 
 //获取特定格式的文件名    
-//void getAllFiles(string path, vector<string>& files, string format)
-//{
-//	long  hFile = 0;//文件句柄  64位下long 改为 intptr_t
-//	struct _finddata_t fileinfo;//文件信息 
-//	string p;
-//	if ((hFile = _findfirst(p.assign(path).append("\\*" + format).c_str(), &fileinfo)) != -1) //文件存在
-//	{
-//		do
-//		{
-//			if ((fileinfo.attrib & _A_SUBDIR))//判断是否为文件夹
-//			{
-//				if (strcmp(fileinfo.name, ".") != 0 && strcmp(fileinfo.name, "..") != 0)//文件夹名中不含"."和".."
-//				{
-//					files.push_back(p.assign(path).append("\\").append(fileinfo.name)); //保存文件夹名
-//					getAllFiles(p.assign(path).append("\\").append(fileinfo.name), files, format); //递归遍历文件夹
-//				}
-//			}
-//			else
-//			{
-//				files.push_back(p.assign(path).append("\\").append(fileinfo.name));//如果不是文件夹，储存文件名
-//			}
-//		} while (_findnext(hFile, &fileinfo) == 0);
-//		_findclose(hFile);
-//	}
-//}
+int getAllFiles(const string& path, const string& format, vector<string>& files)
+{
+	intptr_t hFile = 0;  // 文件句柄  64位下long 改为 intptr_t
+	struct _finddata_t fileinfo;  // 文件信息 
+	string p;
+	if ((hFile = _findfirst(p.assign(path).append("\\*" + format).c_str(), &fileinfo)) != -1)  // 文件存在
+	{
+		do
+		{
+			if ((fileinfo.attrib & _A_SUBDIR))  // 判断是否为文件夹
+			{
+				if (strcmp(fileinfo.name, ".") != 0 && strcmp(fileinfo.name, "..") != 0)  // 文件夹名中不含"."和".."
+				{
+					files.push_back(p.assign(path).append("\\").append(fileinfo.name));  // 保存文件夹名
+					getAllFiles(p.assign(path).append("\\").append(fileinfo.name), format, files);  // 递归遍历文件夹
+				}
+			}
+			else
+			{
+				files.push_back(p.assign(path).append("\\").append(fileinfo.name));  // 如果不是文件夹，储存文件名
+			}
+		} while (_findnext(hFile, &fileinfo) == 0);
+		_findclose(hFile);
+	}
+
+	return files.size();
+}
