@@ -292,7 +292,7 @@ int main(int argc, char** argv)
 	save_structure("../Viewer/structure.yml", rotations, translations, structure, colors);
 	cout << "Save structure done." << endl;
 
-	// 捆绑调整
+	// 捆绑调整(优化)
 	printf("\nBundle adjustment fo SFM...\n");
 	Mat intrinsic(Matx41d(K.at<double>(0, 0), K.at<double>(1, 1), K.at<double>(0, 2), K.at<double>(1, 2)));
 	cout << "intrinsic:\n" << intrinsic << endl;
@@ -384,14 +384,17 @@ void save_to_ply(const string & file_path,
 	assert(file.is_open());
 
 	size_t valid_cnt = 0;
-	for (const auto& point : pts3d)
+	for (int i = 0; i < pts3d.size(); ++i)
 	{
-		if (isnan(point.x) || isnan(point.y)
-			|| isnan(point.z))
+		const Point3d& point = pts3d[i];
+		const Point3d& normal = normals[i];
+
+		if (isnan(point.x) || isnan(point.y) || isnan(point.z) 
+			|| isnan(normal.x) || isnan(normal.y) || isnan(normal.z))
 		{
-			//std::cout << "[Nan]: " << point.x << " " << point.y << " "
-			// << point.z << " " << point.nx << " " << point.ny << " "
-			// << point.nz << std::endl;
+			std::cout << "[Nan]: " << point.x << " " << point.y << " "
+			 << point.z << " " << normal.x << " " << normal.y << " "
+			 << normal.z << std::endl;
 			continue;
 		}
 
@@ -402,7 +405,6 @@ void save_to_ply(const string & file_path,
 	// write ply head
 	file << "ply" << std::endl;
 	file << "format ascii 1.0" << std::endl;
-	//file << "element vertex " << points.size() << std::endl;
 	file << "element vertex " << valid_cnt << std::endl;
 	file << "property float x" << std::endl;
 	file << "property float y" << std::endl;
@@ -416,7 +418,6 @@ void save_to_ply(const string & file_path,
 	file << "end_header" << std::endl;
 
 	// write 3D points
-	//for (const auto& point : pts3d)
 	for (int i = 0; i < pts3d.size(); ++i)
 	{
 		const Point3d& point = pts3d[i];
@@ -426,9 +427,9 @@ void save_to_ply(const string & file_path,
 		if (isnan(point.x) || isnan(point.y)
 			|| isnan(point.z))
 		{
-			//std::cout << "Nan: " << point.x << " " << point.y << " "
-			// << point.z << " " << point.nx << " " << point.ny
-			// << point.nz << std::endl;
+			cout << "Nan: " << point.x << " " << point.y << " "
+			 << point.z << " " << normal.x << " " << normal.y
+			 << normal.z << std::endl;
 			continue;
 		}
 
