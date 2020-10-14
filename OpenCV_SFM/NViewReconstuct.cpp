@@ -3,6 +3,7 @@
 #include <io.h>
 #include <fstream>
 #include <string>
+#include <queue>
 #include <opencv2/core.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgproc.hpp>
@@ -87,10 +88,21 @@ void extract_features(
 void match_features(const Mat& query, const Mat& train, vector<DMatch>& matches);
 void match_features(const vector<Mat>& descriptor_for_all, vector<vector<DMatch>>& matches_for_all);
 void save_structure(string file_name,
-	vector<Mat>& rotations, 
-	vector<Mat>& motions, 
+	vector<Mat>& rotations,
+	vector<Mat>& motions,
 	vector<Point3d>& structure,
 	vector<Vec3b>& colors);
+void save_to_ply(const string & file_path,
+	const vector<Mat>& rotations,
+	const vector<Mat>& translations,
+	const vector<Point3d>& pts3d,
+	const vector<Point3d>& normals,
+	const vector<Vec3b>& colors);
+
+// TODO: 点云法向量估计...
+int estimate_normal(const vector<Point3d>& pts3d,
+	const int K,
+	vector<Point3d>& normals);
 
 // --------------------
 
@@ -166,21 +178,21 @@ int main(int argc, char** argv)
 		//return -1;
 	}
 	const std::string img_dir = std::string(argv[1]);
-	const string format = std::string(".jpg");
+	const string format = std::string(".png");
 	const int N_files = getAllFiles(img_dir, format, img_names);
 	printf("Total %d image files.\n", N_files);
 
 	// 相机内参家矩阵
-	//Mat K(Matx33d(
-	//	2759.48, 0, 1520.69,
-	//	0, 2764.16, 1006.81,
-	//	0, 0, 1));
 	Mat K(Matx33d(
-		1802.0, 0, 540.0,
-		0, 1802.0, 960.0,
+		2759.48, 0, 1520.69,
+		0, 2764.16, 1006.81,
 		0, 0, 1));
+	//Mat K(Matx33d(
+	//	1802.0, 0, 540.0,
+	//	0, 1802.0, 960.0,
+	//	0, 0, 1));
 
-	// TODO: 如何读取图片metadata, 并构建相机内参矩阵K
+	// TODO: 如何读取图片metadata, 并构建相机内参矩阵K...
 
 	vector<vector<cv::KeyPoint>> kpts_for_all;
 	vector<Mat> descriptor_for_all;
@@ -250,8 +262,8 @@ int main(int argc, char** argv)
 		vector<Point2f> pts2d_1, pts2d_2;
 		vector<Vec3b> colors_1, colors_2;
 		get_matched_points(kpts_for_all[i],
-			kpts_for_all[i + 1], 
-			matches_for_all[i], 
+			kpts_for_all[i + 1],
+			matches_for_all[i],
 			pts2d_1, pts2d_2);
 		get_matched_colors(colors_for_all[i],
 			colors_for_all[i + 1],
@@ -273,13 +285,13 @@ int main(int argc, char** argv)
 			colors,
 			colors_1
 		);
-		printf("Frame %d point cloud fused.\n", i);
+		printf("Frame %d point cloud fused, total %d points now.\n", i, (int)structure.size());
 	}
 
 	// 保存优化前的结果
 	save_structure("../Viewer/structure.yml", rotations, translations, structure, colors);
 	cout << "Save structure done." << endl;
-	
+
 	// 捆绑调整
 	printf("\nBundle adjustment fo SFM...\n");
 	Mat intrinsic(Matx41d(K.at<double>(0, 0), K.at<double>(1, 1), K.at<double>(0, 2), K.at<double>(1, 2)));
@@ -301,8 +313,14 @@ int main(int argc, char** argv)
 	// do bundle adjustment
 	bundle_adjustment(intrinsic, extrinsics, correspond_struct_idx, kpts_for_all, structure);
 
+	// 法向量估计
+	vector<Point3d> normals(structure.size());
+	estimate_normal(structure, 10, normals);
+
 	// 保存优化后的结果
-	save_structure("../Viewer/structure_ba.yml", rotations, translations, structure, colors);
+	//save_structure("../Viewer/structure_ba.yml", rotations, translations, structure, colors);
+	printf("Saving structure to ply...\n");
+	save_to_ply("../Viewer/structure_ba.ply", rotations, translations, structure, normals, colors);
 	cout << "Save structure done." << endl;
 
 	getchar();
@@ -351,8 +369,235 @@ void save_structure(string file_name,
 	fs << "]";
 
 	fs.release();
-
 }
+
+void save_to_ply(const string & file_path,
+	const vector<Mat>& rotations,
+	const vector<Mat>& translations,
+	const vector<Point3d>& pts3d,
+	const vector<Point3d>& normals,
+	const vector<Vec3b>& colors)
+{
+	assert((pts3d.size() == normals.size()) && (pts3d.size() == colors.size()));
+
+	ofstream file(file_path);
+	assert(file.is_open());
+
+	size_t valid_cnt = 0;
+	for (const auto& point : pts3d)
+	{
+		if (isnan(point.x) || isnan(point.y)
+			|| isnan(point.z))
+		{
+			//std::cout << "[Nan]: " << point.x << " " << point.y << " "
+			// << point.z << " " << point.nx << " " << point.ny << " "
+			// << point.nz << std::endl;
+			continue;
+		}
+
+		valid_cnt += 1;
+	}
+	std::cout << "total " << valid_cnt << " valid points." << std::endl;
+
+	// write ply head
+	file << "ply" << std::endl;
+	file << "format ascii 1.0" << std::endl;
+	//file << "element vertex " << points.size() << std::endl;
+	file << "element vertex " << valid_cnt << std::endl;
+	file << "property float x" << std::endl;
+	file << "property float y" << std::endl;
+	file << "property float z" << std::endl;
+	file << "property float nx" << std::endl;
+	file << "property float ny" << std::endl;
+	file << "property float nz" << std::endl;
+	file << "property uchar red" << std::endl;
+	file << "property uchar green" << std::endl;
+	file << "property uchar blue" << std::endl;
+	file << "end_header" << std::endl;
+
+	// write 3D points
+	//for (const auto& point : pts3d)
+	for (int i = 0; i < pts3d.size(); ++i)
+	{
+		const Point3d& point = pts3d[i];
+		const Point3d& normal = normals[i];
+		const Vec3b& color = colors[i];
+
+		if (isnan(point.x) || isnan(point.y)
+			|| isnan(point.z))
+		{
+			//std::cout << "Nan: " << point.x << " " << point.y << " "
+			// << point.z << " " << point.nx << " " << point.ny
+			// << point.nz << std::endl;
+			continue;
+		}
+
+		file << point.x << " " << point.y << " " << point.z << " " 
+			<< normal.x << " " << normal.y << " " << normal.z << " "
+			<< color[0] << " " << color[1] << " " << color[2] << std::endl;
+	}
+
+	file.close();
+}
+
+struct Pt3dDist
+{
+	bool operator ()(const pair<Point3d, Point3d> dist_0, const pair<Point3d, Point3d>& dist_1)
+	{
+		const double d0 = sqrt((dist_0.first.x - dist_0.second.x) * (dist_0.first.x - dist_0.second.x)
+			+ (dist_0.first.y - dist_0.second.y) * (dist_0.first.y - dist_0.second.y)
+			+ (dist_0.first.z - dist_0.second.z) * (dist_0.first.z - dist_0.second.z));
+
+		const double d1 = sqrt((dist_1.first.x - dist_1.second.x) * (dist_1.first.x - dist_1.second.x)
+			+ (dist_1.first.y - dist_1.second.y) * (dist_1.first.y - dist_1.second.y)
+			+ (dist_1.first.z - dist_1.second.z) * (dist_1.first.z - dist_1.second.z));
+
+		return d0 > d1;
+	}
+};
+
+int PCAFitPlane(const vector<Point3d>& pts3d, double* normal);
+
+// 点云法向量估计 
+int estimate_normal(const vector<Point3d>& pts3d,
+	const int K,  // top K
+	vector<Point3d>& normals)
+{
+	for (int i = 0; i < pts3d.size(); ++i)
+	{
+		// 当前处理3D点
+		const Point3d& pt3d = pts3d[i];
+
+		priority_queue<pair<Point3d, Point3d>, vector<pair<Point3d, Point3d>>, Pt3dDist> neighbors;
+
+		// ----- 最近邻(K)搜索
+		for (int j = 0; j < pts3d.size(); ++j)
+		{
+			if (j != i)
+			{
+				neighbors.push(make_pair(pt3d, pts3d[j]));
+			}
+		}
+
+		// 取出距离最小的top K
+		vector<Point3d> neighs(K);
+		for (int k = 0; k < K; ++k)
+		{
+			const pair<Point3d, Point3d>& neighbor = neighbors.top();
+			neighs[k] = neighbor.second;  // 取出来放进neighs数组
+
+			//// 验证距离...
+			//double dist = sqrt((neighs[k].x - pt3d.x) * (neighs[k].x - pt3d.x)
+			//+ (neighs[k].y - pt3d.y) * (neighs[k].y - pt3d.y)
+			//+ (neighs[k].z - pt3d.z) * (neighs[k].z - pt3d.z));
+			//printf("Dist : %.3f\n", dist);
+
+			neighbors.pop();
+		}
+		//printf("Nearest %d neighbor of 3D point %d computed.\n", K, i);
+
+		// 平面拟合
+		double normal[3] = { 0.0 };
+		PCAFitPlane(neighs, normal);
+
+		normals[i].x = normal[0];
+		normals[i].y = normal[1];
+		normals[i].z = normal[2];
+	}
+
+	return 0;
+}
+
+int PCAFitPlane(const vector<Point3d>& pts3d, double* normal)
+{
+	double ave_x = 0.0f, ave_y = 0.0f, ave_z = 0.0f;
+	for (auto pt : pts3d)
+	{
+		ave_x += pt.x;
+		ave_y += pt.y;
+		ave_z += pt.z;
+	}
+	ave_x /= double(pts3d.size());
+	ave_y /= double(pts3d.size());
+	ave_z /= double(pts3d.size());
+
+	// 求协方差矩阵A
+	Eigen::Matrix3d A;
+	double sum_xx = 0.0f, sum_yy = 0.0f, sum_zz = 0.0f,
+		sum_xy = 0.0f, sum_xz = 0.0f, sum_yz = 0.0f;
+	for (auto pt : pts3d)
+	{
+		sum_xx += (pt.x - ave_x) * (pt.x - ave_x);
+		sum_yy += (pt.y - ave_y) * (pt.y - ave_y);
+		sum_zz += (pt.z - ave_z) * (pt.z - ave_z);
+
+		sum_xy += (pt.x - ave_x) * (pt.y - ave_y);
+		sum_xz += (pt.x - ave_x) * (pt.z - ave_z);
+		sum_yz += (pt.y - ave_y) * (pt.z - ave_z);
+	}
+	A(0, 0) = sum_xx / double(pts3d.size());  // 其实, 没必要求均值
+	A(0, 1) = sum_xy / double(pts3d.size());
+	A(0, 2) = sum_xz / double(pts3d.size());
+	A(1, 0) = sum_xy / double(pts3d.size());
+	A(1, 1) = sum_yy / double(pts3d.size());
+	A(1, 2) = sum_yz / double(pts3d.size());
+	A(2, 0) = sum_xz / double(pts3d.size());
+	A(2, 1) = sum_yz / double(pts3d.size());
+	A(2, 2) = sum_zz / double(pts3d.size());
+
+	// 求协方差矩阵A的特征值和特征向量
+	Eigen::EigenSolver<Eigen::Matrix3d> ES(A);
+	Eigen::MatrixXcd eigen_vals = ES.eigenvalues();
+	Eigen::MatrixXcd eigen_vects = ES.eigenvectors();
+	Eigen::MatrixXd eis = eigen_vals.real();
+	Eigen::MatrixXd vects = eigen_vects.real();
+
+	// 求最小特征值对应的特征向量
+	Eigen::MatrixXf::Index min_idx, max_idx;
+	eis.rowwise().sum().minCoeff(&min_idx);
+	eis.rowwise().sum().maxCoeff(&max_idx);
+
+	// ----- 对特征值(特征向量)排序：从小到大
+	int mid_idx = 0;
+	if (0 == (int)min_idx)
+	{
+		mid_idx = max_idx == 1 ? 2 : 1;
+	}
+	else if (1 == (int)min_idx)
+	{
+		mid_idx = max_idx == 0 ? 2 : 0;
+	}
+	else
+	{
+		mid_idx = max_idx == 0 ? 1 : 0;
+	}
+
+	// 最小特征值对用的特征向量
+	double& a = vects(0, min_idx);
+	double& b = vects(1, min_idx);
+	double& c = vects(2, min_idx);
+
+	// 确定正确的法向方向: 确保normal指向camera
+	if (a * ave_x + b * ave_y + c * ave_z > 0.0f)
+	{
+		a = -a;
+		b = -b;
+		c = -c;
+	}
+
+	// 最小特征向量(法向量)L2归一化
+	const double DENOM = sqrt(a*a + b * b + c * c);
+	a /= DENOM;
+	b /= DENOM;
+	c /= DENOM;
+	double plane_normal[3] = { a, b, c };
+
+	// 返回平面法向量
+	memcpy(normal, plane_normal, sizeof(double) * 3);
+
+	return 0;
+}
+
 
 void extract_features(
 	vector<string>& image_names,
@@ -535,9 +780,9 @@ int init_structure(
 		{
 			continue;
 		}
-		
+
 		// 如果两个点对应的idx相等,表明它们是同一特征点 idx 就是structure中对应的空间点坐标索引
-		correspond_struct_idx[0][matches[i].queryIdx] = idx;  
+		correspond_struct_idx[0][matches[i].queryIdx] = idx;
 		correspond_struct_idx[1][matches[i].trainIdx] = idx;
 		++idx;
 	}
@@ -732,7 +977,7 @@ void bundle_adjustment(
 	problem.AddParameterBlock(intrinsic.ptr<double>(), 4); // fx, fy, cx, cy
 
 	// loss function make bundle adjustment robuster.
-	ceres::LossFunction* loss_function = new ceres::HuberLoss(4);  
+	ceres::LossFunction* loss_function = new ceres::HuberLoss(4);
 
 	// load points
 	for (size_t img_idx = 0; img_idx < correspond_struct_idx.size(); ++img_idx)
@@ -873,5 +1118,5 @@ int getAllFiles(const string& path, const string& format, vector<string>& files)
 		_findclose(hFile);
 	}
 
-	return files.size();
+	return int(files.size());
 }
