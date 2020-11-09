@@ -64,7 +64,7 @@ int reconstruct(const Mat& K,
 	Mat& R1, Mat& T1, Mat& R2, Mat& T2,
 	vector<Point2f>& p1, vector<Point2f>& p2,
 	vector<Point3d>& structure);
-void get_objpoints_and_imgpoints(
+void get_obj_pts_and_img_pts(
 	const vector<DMatch>& matches,
 	const vector<int>& struct_indices,
 	const vector<Point3d>& structure,
@@ -234,7 +234,7 @@ int main(int argc, char** argv)
 		Mat r, R, T;
 
 		// 获取第i副图像中匹配点对应的三维点，以及在第i+1副图像中对应的像素点
-		get_objpoints_and_imgpoints(
+		get_obj_pts_and_img_pts(
 			matches_for_all[i],  // 第i个匹配: 第i帧和第i+1帧的匹配
 			correspond_struct_idx[i],
 			structure,
@@ -1038,7 +1038,7 @@ void bundle_adjustment(
 	}
 }
 
-void get_objpoints_and_imgpoints(
+void get_obj_pts_and_img_pts(
 	const vector<DMatch>& matches,  // matches for this frame
 	const vector<int>& struct_indices,  // struct indices for keypoints of this frame
 	const vector<Point3d>& structure,
