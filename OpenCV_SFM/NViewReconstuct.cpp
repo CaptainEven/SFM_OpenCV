@@ -118,7 +118,7 @@ struct ReprojectCost
 	template <typename T>
 	bool operator()(const T* const intrinsic, const T* const extrinsic, const T* const pt3d, T* residuals) const
 	{
-		const T* r = extrinsic;  // 旋转向量指针
+		const T* r = extrinsic;      // 旋转向量指针
 		const T* t = &extrinsic[3];  // 平移向量指针
 
 		// Apply rotation: from world to camera
@@ -152,7 +152,7 @@ struct ReprojectCost
 
 // --------------------
 
-const string img_dir = "../Images/";
+const string img_dir = "../dataset/desktop";
 
 int main(int argc, char** argv)
 {
@@ -178,19 +178,19 @@ int main(int argc, char** argv)
 		//return -1;
 	}
 	const std::string img_dir = std::string(argv[1]);
-	const string format = std::string(".png");
+	const string format = std::string(".jpg");  // .jpg .png
 	const int N_files = getAllFiles(img_dir, format, img_names);
 	printf("Total %d image files.\n", N_files);
 
 	// 相机内参家矩阵
-	Mat K(Matx33d(
-		2759.48, 0, 1520.69,
-		0, 2764.16, 1006.81,
-		0, 0, 1));
 	//Mat K(Matx33d(
-	//	1802.0, 0, 540.0,
-	//	0, 1802.0, 960.0,
+	//	2759.48, 0, 1520.69,
+	//	0, 2764.16, 1006.81,
 	//	0, 0, 1));
+	Mat K(Matx33d(
+		2526.561, 0, 1835.259,
+		0, 2826.519, 1370.103,
+		0, 0, 1));
 
 	// TODO: 如何读取图片metadata, 并构建相机内参矩阵K...
 
@@ -952,6 +952,7 @@ int reconstruct(const Mat& K,
 		pt3d_homo /= pt3d_homo(3);	// 齐次坐标———>非齐次坐标
 		structure.push_back(Point3f(pt3d_homo(0), pt3d_homo(1), pt3d_homo(2)));
 	}
+
 	return 0;
 }
 
