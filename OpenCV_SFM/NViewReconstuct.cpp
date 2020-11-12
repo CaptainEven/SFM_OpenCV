@@ -17,6 +17,20 @@
 using namespace std;
 using namespace cv;
 
+
+struct Pt3DPly
+{
+	float x = 0.0f;
+	float y = 0.0f;
+	float z = 0.0f;
+	float nx = 0.0f;
+	float ny = 0.0f;
+	float nz = 0.0f;
+	uint8_t r = 0;
+	uint8_t g = 0;
+	uint8_t b = 0;
+};
+
 // --------------------
 int getAllFiles(const string& path, const string& format, vector<string>& files);
 
@@ -92,12 +106,13 @@ void save_structure(string file_name,
 	vector<Mat>& motions,
 	vector<Point3d>& structure,
 	vector<Vec3b>& colors);
-void save_to_ply(const string & file_path,
-	const vector<Mat>& rotations,
-	const vector<Mat>& translations,
-	const vector<Point3d>& pts3d,
+
+void write_ply_binary(const std::string& path,
+	const std::vector<Pt3DPly>& points);
+int GetPlyPt3Ds(const vector<Point3d>& pts3d,
 	const vector<Point3d>& normals,
-	const vector<Vec3b>& colors);
+	const vector<Vec3b>& colors,
+	vector<Pt3DPly>& pts3d_ply);
 
 // TODO: 点云法向量估计...
 int estimate_normal(const vector<Point3d>& pts3d,
@@ -290,7 +305,6 @@ int main(int argc, char** argv)
 
 	// 保存优化前的结果
 	save_structure("../Viewer/structure.yml", rotations, translations, structure, colors);
-	cout << "Save structure done." << endl;
 
 	// 捆绑调整(优化)
 	printf("\nBundle adjustment fo SFM...\n");
@@ -318,9 +332,15 @@ int main(int argc, char** argv)
 	estimate_normal(structure, 10, normals);
 
 	// 保存优化后的结果
-	//save_structure("../Viewer/structure_ba.yml", rotations, translations, structure, colors);
+	save_structure("../Viewer/structure_ba.yml", rotations, translations, structure, colors);
+	printf("structure_ba.yml saved.\n");
+
 	printf("Saving structure to ply...\n");
-	save_to_ply("../Viewer/structure_ba.ply", rotations, translations, structure, normals, colors);
+	vector<Pt3DPly> pts3dply;
+	GetPlyPt3Ds(structure, normals, colors, pts3dply);
+	write_ply_binary(string("../Viewer/structure_ba.ply"), pts3dply);
+	printf("../Viewer/structure_ba.ply saved.\n");
+
 	cout << "Save structure done." << endl;
 
 	getchar();
@@ -371,74 +391,115 @@ void save_structure(string file_name,
 	fs.release();
 }
 
-void save_to_ply(const string & file_path,
-	const vector<Mat>& rotations,
-	const vector<Mat>& translations,
-	const vector<Point3d>& pts3d,
-	const vector<Point3d>& normals,
-	const vector<Vec3b>& colors)
+void write_ply_binary(const std::string& path,
+	const std::vector<Pt3DPly>& points)
 {
-	assert((pts3d.size() == normals.size()) && (pts3d.size() == colors.size()));
-
-	ofstream file(file_path);
-	assert(file.is_open());
+	std::fstream text_file(path, std::ios::out);
+	assert(text_file.is_open());
 
 	size_t valid_cnt = 0;
-	for (int i = 0; i < pts3d.size(); ++i)
+	for (const auto& point : points)
 	{
-		const Point3d& point = pts3d[i];
-		const Point3d& normal = normals[i];
-
-		if (isnan(point.x) || isnan(point.y) || isnan(point.z) 
-			|| isnan(normal.x) || isnan(normal.y) || isnan(normal.z))
+		if (isnan(point.x) || isnan(point.y)
+			|| isnan(point.z) || isnan(point.nx)
+			|| isnan(point.ny) || isnan(point.nz))
 		{
-			std::cout << "[Nan]: " << point.x << " " << point.y << " "
-			 << point.z << " " << normal.x << " " << normal.y << " "
-			 << normal.z << std::endl;
+			//std::cout << "[Nan]: " << point.x << " " << point.y << " "
+			//	<< point.z << " " << point.nx << " " << point.ny << " "
+			//	<< point.nz << std::endl;
 			continue;
 		}
 
 		valid_cnt += 1;
 	}
-	std::cout << "total " << valid_cnt << " valid points." << std::endl;
 
-	// write ply head
-	file << "ply" << std::endl;
-	file << "format ascii 1.0" << std::endl;
-	file << "element vertex " << valid_cnt << std::endl;
-	file << "property float x" << std::endl;
-	file << "property float y" << std::endl;
-	file << "property float z" << std::endl;
-	file << "property float nx" << std::endl;
-	file << "property float ny" << std::endl;
-	file << "property float nz" << std::endl;
-	file << "property uchar red" << std::endl;
-	file << "property uchar green" << std::endl;
-	file << "property uchar blue" << std::endl;
-	file << "end_header" << std::endl;
+	text_file << "ply" << std::endl;
+	text_file << "format binary_little_endian 1.0" << std::endl;
+	//text_file << "element vertex " << points.size() << std::endl;
+	text_file << "element vertex " << valid_cnt << std::endl;
+	text_file << "property float x" << std::endl;
+	text_file << "property float y" << std::endl;
+	text_file << "property float z" << std::endl;
+	text_file << "property float nx" << std::endl;
+	text_file << "property float ny" << std::endl;
+	text_file << "property float nz" << std::endl;
+	text_file << "property uchar red" << std::endl;
+	text_file << "property uchar green" << std::endl;
+	text_file << "property uchar blue" << std::endl;
+	text_file << "end_header" << std::endl;
+	text_file.close();
 
-	// write 3D points
-	for (int i = 0; i < pts3d.size(); ++i)
+	std::fstream binary_file(path,
+		std::ios::out | std::ios::binary | std::ios::app);
+	assert(binary_file.is_open());
+
+	for (const auto& point : points)
 	{
-		const Point3d& point = pts3d[i];
-		const Point3d& normal = normals[i];
-		const Vec3b& color = colors[i];
-
-		if (isnan(point.x) || isnan(point.y)
-			|| isnan(point.z))
+		if (isnan(point.x) || isnan(point.y) || isnan(point.z)
+			|| isnan(point.nx) || isnan(point.ny) || isnan(point.nz))
 		{
-			cout << "Nan: " << point.x << " " << point.y << " "
-			 << point.z << " " << normal.x << " " << normal.y
-			 << normal.z << std::endl;
+			//std::cout << "[Nan]: " << point.x << " " << point.y << " "
+			//	<< point.z << " " << point.nx << " " << point.ny
+			//	<< point.nz << std::endl;
 			continue;
 		}
 
-		file << point.x << " " << point.y << " " << point.z << " " 
-			<< normal.x << " " << normal.y << " " << normal.z << " "
-			<< color[0] << " " << color[1] << " " << color[2] << std::endl;
+		binary_file.write((char *)(&(point.x)), sizeof(float));
+		binary_file.write((char *)(&(point.y)), sizeof(float));
+		binary_file.write((char *)(&(point.z)), sizeof(float));
+		binary_file.write((char *)(&(point.nx)), sizeof(float));
+		binary_file.write((char *)(&(point.ny)), sizeof(float));
+		binary_file.write((char *)(&(point.nz)), sizeof(float));
+		binary_file.write((char *)(&(point.r)), sizeof(uint8_t));
+		binary_file.write((char *)(&(point.g)), sizeof(uint8_t));
+		binary_file.write((char *)(&(point.b)), sizeof(uint8_t));
 	}
 
-	file.close();
+	binary_file.close();
+}
+
+int GetPlyPt3Ds(const vector<Point3d>& pts3d, 
+	const vector<Point3d>& normals, 
+	const vector<Vec3b>& colors,
+	vector<Pt3DPly>& pts3d_ply)
+{
+	if (pts3d.size() != normals.size()
+		|| pts3d.size() != colors.size())
+	{
+		printf("[Err]: items size not equal.\n");
+		return -1;
+	}
+
+	// 分配内存
+	pts3d_ply.resize(pts3d.size());
+
+	for (int i = 0; i < pts3d.size(); ++i)
+	{
+		const Point3d& pt3d = pts3d[i];
+		const Point3d& normal = normals[i];
+		const Vec3b& color = colors[i];
+
+		// 写入点的数据
+		Pt3DPly pt3dply;
+
+		pt3dply.x = (float)pt3d.x;
+		pt3dply.y = (float)pt3d.y;
+		pt3dply.z = (float)pt3d.z;
+
+
+		pt3dply.nx = (float)normal.x;
+		pt3dply.ny = (float)normal.y;
+		pt3dply.nz = (float)normal.z;
+
+		pt3dply.b = color[0];
+		pt3dply.g = color[1];
+		pt3dply.r = color[2];
+
+		pts3d_ply[i] = pt3dply;
+	}
+	printf("Total %zd 3D points.\n", pts3d.size());
+
+	return 0;
 }
 
 struct Pt3dDist
@@ -598,7 +659,6 @@ int PCAFitPlane(const vector<Point3d>& pts3d, double* normal)
 
 	return 0;
 }
-
 
 void extract_features(
 	vector<string>& image_names,
