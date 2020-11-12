@@ -109,7 +109,7 @@ void save_structure(string file_name,
 
 void write_ply_binary(const std::string& path,
 	const std::vector<Pt3DPly>& points);
-int GetPlyPt3Ds(const vector<Point3d>& pts3d,
+int get_ply_pts3d(const vector<Point3d>& pts3d,
 	const vector<Point3d>& normals,
 	const vector<Vec3b>& colors,
 	vector<Pt3DPly>& pts3d_ply);
@@ -324,7 +324,7 @@ int main(int argc, char** argv)
 		extrinsics.push_back(extrinsic);
 	}
 
-	// do bundle adjustment
+	// 优化: do bundle adjustment
 	bundle_adjustment(intrinsic, extrinsics, correspond_struct_idx, kpts_for_all, structure);
 
 	// 法向量估计
@@ -336,8 +336,8 @@ int main(int argc, char** argv)
 	printf("structure_ba.yml saved.\n");
 
 	printf("Saving structure to ply...\n");
-	vector<Pt3DPly> pts3dply;
-	GetPlyPt3Ds(structure, normals, colors, pts3dply);
+	vector<Pt3DPly> pts3dply; 
+	get_ply_pts3d(structure, normals, colors, pts3dply);  // 点云格式化为ply
 	write_ply_binary(string("../Viewer/structure_ba.ply"), pts3dply);
 	printf("../Viewer/structure_ba.ply saved.\n");
 
@@ -458,7 +458,7 @@ void write_ply_binary(const std::string& path,
 	binary_file.close();
 }
 
-int GetPlyPt3Ds(const vector<Point3d>& pts3d, 
+int get_ply_pts3d(const vector<Point3d>& pts3d, 
 	const vector<Point3d>& normals, 
 	const vector<Vec3b>& colors,
 	vector<Pt3DPly>& pts3d_ply)
