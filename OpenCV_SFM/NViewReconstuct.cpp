@@ -317,8 +317,11 @@ int main(int argc, char** argv)
 		Mat r;
 		Rodrigues(rotations[i], r);
 
-		r.copyTo(extrinsic.rowRange(0, 3));  // 前三项是旋转向量
-		translations[i].copyTo(extrinsic.rowRange(3, 6));  // 后三项是平移向量
+		// 前三项是旋转向量
+		r.copyTo(extrinsic.rowRange(0, 3));
+
+		// 后三项是平移向量
+		translations[i].copyTo(extrinsic.rowRange(3, 6));  
 
 		// 添加外参向量
 		extrinsics.push_back(extrinsic);
@@ -335,6 +338,7 @@ int main(int argc, char** argv)
 	save_structure("../Viewer/structure_ba.yml", rotations, translations, structure, colors);
 	printf("structure_ba.yml saved.\n");
 
+	// 保存ply格式点云数据
 	printf("Saving structure to ply...\n");
 	vector<Pt3DPly> pts3dply; 
 	get_ply_pts3d(structure, normals, colors, pts3dply);  // 点云格式化为ply
