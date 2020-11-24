@@ -59,7 +59,12 @@ void get_matched_colors(
 	vector<Vec3b>& out_c1,
 	vector<Vec3b>& out_c2
 );
-bool find_transform(const Mat& K, const vector<Point2f>& p1, const vector<Point2f>& p2, Mat& R, Mat& T, Mat& mask);
+bool find_transform(const Mat& K,
+	const vector<Point2f>& p1,
+	const vector<Point2f>& p2,
+	Mat& R,
+	Mat& T,
+	Mat& mask);
 
 void maskout_points(const Mat& mask, vector<Point2f>& p1);
 void maskout_2d_pts_pair(const Mat& mask, vector<Point2f>& pts1, vector<Point2f>& pts2);
@@ -114,8 +119,21 @@ int get_ply_pts3d(const vector<Point3d>& pts3d,
 	const vector<Vec3b>& colors,
 	vector<Pt3DPly>& pts3d_ply);
 
-// TODO: 点云法向量估计...
-int estimate_normal(const vector<Point3d>& pts3d,
+// 读取bundler.out文件(SFM的输出文件), 输出ply点云...
+int read_bundler_write_ply(const std::string& ply_out_f_path,
+	const std::string& img_dir_path,
+	const std::string& bundler_out_path,
+	const std::string& bunlder_list_path);
+
+int PCAFitPlane(const vector<Point3d>& pts3d, double* normal);
+int PCAFitPlane(const vector<Pt3DPly>& pts3d, double* normal);
+
+// 点云法向量估计
+int estimate_normals(const vector<Point3d>& pts3d,
+	const int K,
+	vector<Point3d>& normals);
+
+int estimate_normals(const vector<Pt3DPly>& pts3d,
 	const int K,
 	vector<Point3d>& normals);
 
@@ -164,193 +182,6 @@ struct ReprojectCost
 		return true;
 	}
 };
-
-// --------------------
-
-const string img_dir = "../dataset/desktop";
-
-int main(int argc, char** argv)
-{
-	vector<string> img_names;
-
-	if (argc != 2)
-	{
-		cout << "Usage: Image directory path to SFM reconstruction." << endl;
-		cout << "Using default image directory path.";
-
-		img_names.push_back(img_dir + "0000.png");
-		img_names.push_back(img_dir + "0001.png");
-		img_names.push_back(img_dir + "0002.png");
-		img_names.push_back(img_dir + "0003.png");
-		img_names.push_back(img_dir + "0004.png");
-		img_names.push_back(img_dir + "0005.png");
-		img_names.push_back(img_dir + "0006.png");
-		img_names.push_back(img_dir + "0007.png");
-		img_names.push_back(img_dir + "0008.png");
-		img_names.push_back(img_dir + "0009.png");
-		img_names.push_back(img_dir + "0010.png");
-
-		//return -1;
-	}
-	const std::string img_dir = std::string(argv[1]);
-	const string format = std::string(".jpg");  // .jpg .png
-	const int N_files = getAllFiles(img_dir, format, img_names);
-	printf("Total %d image files.\n", N_files);
-
-	// 相机内参家矩阵
-	//Mat K(Matx33d(
-	//	2759.48, 0, 1520.69,
-	//	0, 2764.16, 1006.81,
-	//	0, 0, 1));
-	Mat K(Matx33d(
-		2526.561, 0, 1835.259,
-		0, 2826.519, 1370.103,
-		0, 0, 1));
-
-	// TODO: 如何读取图片metadata, 并构建相机内参矩阵K...
-
-	vector<vector<cv::KeyPoint>> kpts_for_all;
-	vector<Mat> descriptor_for_all;
-	vector<vector<Vec3b>> colors_for_all;
-	vector<vector<DMatch>> matches_for_all;
-
-	// 提取所有图像的特征
-	extract_features(img_names, kpts_for_all, descriptor_for_all, colors_for_all);
-
-	// 对所有图像进行顺次的特征匹配
-	match_features(descriptor_for_all, matches_for_all);
-
-	vector<Point3d> structure;
-	vector<vector<int>> correspond_struct_idx;	// 保存第i副图像中第j特征点对应的structure中3D点的索引
-	vector<Vec3b> colors;  // 3个字节表示一个RGB或BGR颜色
-	vector<Mat> rotations;  // 旋转矩阵数组
-	vector<Mat> translations;  // 平移向量数组
-
-	// 初始化结构（三维点云） 前两帧
-	printf("\nConstruct from the first two frames...\n");
-	const int ret = init_structure(
-		K,
-		kpts_for_all,
-		colors_for_all,
-		matches_for_all,
-		structure,
-		correspond_struct_idx,
-		colors,
-		rotations,
-		translations
-	);
-
-	// 增量方式重建剩余的图像
-	printf("\nIncremental SFM...\n");
-	for (int i = 1; i < matches_for_all.size(); ++i)  // 遍历剩余匹配
-	{
-		vector<Point3f> obj_pts;  // 3D点
-		vector<Point2f> img_pts;  // 2D点
-		Mat r, R, T;
-
-		// 获取第i副图像中匹配点对应的三维点，以及在第i+1副图像中对应的像素点
-		get_obj_pts_and_img_pts(
-			matches_for_all[i],  // 第i个匹配: 第i帧和第i+1帧的匹配
-			correspond_struct_idx[i],
-			structure,
-			kpts_for_all[i + 1],
-			obj_pts,
-			img_pts
-		);
-
-		// 求解当前帧(第i+1帧)的相机位姿(变换矩阵[R|T])
-		if (obj_pts.size() < 4 || img_pts.size() < 4)
-		{
-			printf("[Warning]: too few 3D-2D point pairs for frame %d.\n", i);
-			continue;
-		}
-		const bool& ret = cv::solvePnPRansac(obj_pts, img_pts, K, cv::noArray(), r, T);
-
-		// 将旋转向量转换为旋转矩阵
-		cv::Rodrigues(r, R);  // CV提供用于旋转向量与旋转矩阵相互转换的函数
-
-		// 保存当前帧的变换矩阵
-		rotations.push_back(R);  // 第i+1帧的旋转矩阵
-		translations.push_back(T);  // 第i+1帧的平移向量
-
-		// 获取第i帧和第i+1帧的匹配特征点
-		vector<Point2f> pts2d_1, pts2d_2;
-		vector<Vec3b> colors_1, colors_2;
-		get_matched_points(kpts_for_all[i],
-			kpts_for_all[i + 1],
-			matches_for_all[i],
-			pts2d_1, pts2d_2);
-		get_matched_colors(colors_for_all[i],
-			colors_for_all[i + 1],
-			matches_for_all[i],
-			colors_1, colors_2);
-
-		// 根据之前求得的R, T进行三维重建
-		vector<Point3d> next_structure;
-		reconstruct(K, rotations[i], translations[i], R, T, pts2d_1, pts2d_2, next_structure);
-		printf("Frame %d reconstructed.\n", i);
-
-		//将新的重建3D点云与已经重建的3D点云进行融合
-		fuse_structure(
-			matches_for_all[i],
-			correspond_struct_idx[i],
-			correspond_struct_idx[i + 1],
-			structure,
-			next_structure,
-			colors,
-			colors_1
-		);
-		printf("Frame %d point cloud fused, total %d points now.\n", i, (int)structure.size());
-	}
-
-	// 保存优化前的结果
-	save_structure("../Viewer/structure.yml", rotations, translations, structure, colors);
-
-	// 捆绑调整(优化)
-	printf("\nBundle adjustment fo SFM...\n");
-	Mat intrinsic(Matx41d(K.at<double>(0, 0), K.at<double>(1, 1), K.at<double>(0, 2), K.at<double>(1, 2)));
-	cout << "intrinsic:\n" << intrinsic << endl;
-	vector<Mat> extrinsics;  // 外参向量数组
-	for (size_t i = 0; i < rotations.size(); ++i)
-	{
-		Mat extrinsic(6, 1, CV_64FC1);
-		Mat r;
-		Rodrigues(rotations[i], r);
-
-		// 前三项是旋转向量
-		r.copyTo(extrinsic.rowRange(0, 3));
-
-		// 后三项是平移向量
-		translations[i].copyTo(extrinsic.rowRange(3, 6));  
-
-		// 添加外参向量
-		extrinsics.push_back(extrinsic);
-	}
-
-	// 优化: do bundle adjustment
-	bundle_adjustment(intrinsic, extrinsics, correspond_struct_idx, kpts_for_all, structure);
-
-	// 法向量估计
-	vector<Point3d> normals(structure.size());
-	estimate_normal(structure, 10, normals);
-
-	// 保存优化后的结果
-	save_structure("../Viewer/structure_ba.yml", rotations, translations, structure, colors);
-	printf("structure_ba.yml saved.\n");
-
-	// 保存ply格式点云数据
-	printf("Saving structure to ply...\n");
-	vector<Pt3DPly> pts3dply; 
-	get_ply_pts3d(structure, normals, colors, pts3dply);  // 点云格式化为ply
-	write_ply_binary(string("../Viewer/structure_ba.ply"), pts3dply);
-	printf("../Viewer/structure_ba.ply saved.\n");
-
-	cout << "Save structure done." << endl;
-
-	getchar();
-
-	return 0;
-}
 
 void save_structure(string file_name,
 	vector<Mat>& rotations,
@@ -462,8 +293,8 @@ void write_ply_binary(const std::string& path,
 	binary_file.close();
 }
 
-int get_ply_pts3d(const vector<Point3d>& pts3d, 
-	const vector<Point3d>& normals, 
+int get_ply_pts3d(const vector<Point3d>& pts3d,
+	const vector<Point3d>& normals,
 	const vector<Vec3b>& colors,
 	vector<Pt3DPly>& pts3d_ply)
 {
@@ -506,6 +337,134 @@ int get_ply_pts3d(const vector<Point3d>& pts3d,
 	return 0;
 }
 
+int read_bundler_write_ply(const std::string& ply_out_f_path,
+	const std::string& img_dir_path,
+	const std::string& bundler_file_path,
+	const std::string& bunlder_list_path)
+{
+	std::ifstream f_bundler(bundler_file_path);
+	std::ifstream f_list(bunlder_list_path);
+
+	if (!f_bundler.is_open())
+	{
+		printf("[Err]: bundler_file_path wrong.\n");
+		exit(-1);
+	}
+	if (!f_list.is_open())
+	{
+		printf("[Err]: bundler_list_path wrong.\n");
+		exit(-1);
+	}
+
+	// Read Header line
+	std::string header;
+	std::getline(f_bundler, header);
+
+	// Read image number and points number
+	int num_images, num_points;
+	f_bundler >> num_images >> num_points;
+
+	// Read each image(view) info
+	for (int img_id = 0; img_id < num_images; ++img_id)
+	{
+		// Read image name(path)
+		std::string img_path;
+		std::getline(f_list, img_path);
+		img_path = img_dir_path + "/" + img_path;
+
+		// Read image
+		cv::Mat img = cv::imread(img_path);
+
+		// ---------- Read camera matrix
+		float K[9] = {
+			1.0f, 0.0f, 0.0f,
+			0.0f, 1.0f, 0.0f,
+			0.0f, 0.0f, 1.0f
+		};
+		float f_len;
+		f_bundler >> f_len;
+		if (f_len < 1.0f)
+		{
+			K[0] = f_len * float(img.cols);
+			K[4] = f_len * float(img.rows);
+		}
+		else
+		{
+			f_bundler >> K[0];
+			K[4] = K[0];  // fx == fy
+		}
+
+		printf("Focus length(pixel): %.3f\n", K[0]);
+
+		// Read image center
+		K[2] = img.cols / 2.0f;  // cx
+		K[5] = img.rows / 2.0f;  // cy
+
+		// Read radial distortion coefficients(k1, k2)
+		float k[2];
+		f_bundler >> k[0] >> k[1];
+
+		// ----------
+
+		// ---------- Read poses
+		// ----- Read rotation matrix
+		float R[9];
+		for (size_t i = 0; i < 9; ++i)
+		{
+			f_bundler >> R[i];
+		}
+		for (size_t i = 3; i < 9; ++i)  // why?
+		{
+			R[i] = -R[i];
+		}
+
+		// ----- Read translation vector
+		float T[3];
+		f_bundler >> T[0] >> T[1] >> T[2];
+		T[1] = -T[1];
+		T[2] = -T[2];
+	}
+
+	// load points info
+	std::vector<Pt3DPly> pts3d_ply(num_points);
+	for (int pt_id = 0; pt_id < num_points; ++pt_id)
+	{
+		// 3d point coordinates
+		Pt3DPly pt3d;
+		f_bundler >> pt3d.x >> pt3d.y >> pt3d.z;
+
+		// 3d point color
+		f_bundler >> pt3d.r >> pt3d.g >> pt3d.b;
+
+		// track length
+		int track_len;
+		f_bundler >> track_len;
+
+		// load 3D point track info
+		std::vector<int> track;
+		track.resize(track_len);
+		for (int i = 0; i < track_len; ++i)
+		{
+			int feature_idx;
+			float im_x, im_y;
+
+			f_bundler >> track[i] >> feature_idx >> im_x >> im_y;
+		}
+
+		// Add pt3d to pts vector
+		pts3d_ply[pt_id] = pt3d;
+	}
+
+	// estimate point normals
+	std::vector<cv::Point3d> normals;
+	estimate_normals(pts3d_ply, 10, normals);
+
+	// write out point cloud(.ply)
+	write_ply_binary(ply_out_f_path, pts3d_ply);
+
+	return 0;
+}
+
 struct Pt3dDist
 {
 	bool operator ()(const pair<Point3d, Point3d> dist_0, const pair<Point3d, Point3d>& dist_1)
@@ -522,10 +481,74 @@ struct Pt3dDist
 	}
 };
 
-int PCAFitPlane(const vector<Point3d>& pts3d, double* normal);
+struct Pt3dPlyDist
+{
+	bool operator ()(const pair<Pt3DPly, Pt3DPly> dist_0, const pair<Pt3DPly, Pt3DPly>& dist_1)
+	{
+		const double d0 = sqrt((dist_0.first.x - dist_0.second.x) * (dist_0.first.x - dist_0.second.x)
+			+ (dist_0.first.y - dist_0.second.y) * (dist_0.first.y - dist_0.second.y)
+			+ (dist_0.first.z - dist_0.second.z) * (dist_0.first.z - dist_0.second.z));
+
+		const double d1 = sqrt((dist_1.first.x - dist_1.second.x) * (dist_1.first.x - dist_1.second.x)
+			+ (dist_1.first.y - dist_1.second.y) * (dist_1.first.y - dist_1.second.y)
+			+ (dist_1.first.z - dist_1.second.z) * (dist_1.first.z - dist_1.second.z));
+
+		return d0 > d1;
+	}
+};
+
+int estimate_normals(const vector<Pt3DPly>& pts3d,
+	const int K,
+	vector<Point3d>& normals)
+{
+	for (int i = 0; i < pts3d.size(); ++i)
+	{
+		// 当前处理3D点
+		const Pt3DPly& pt3d = pts3d[i];
+
+		priority_queue<pair<Pt3DPly, Pt3DPly>,
+			vector<pair<Pt3DPly, Pt3DPly>>, Pt3dPlyDist> neighbors;
+
+		// ----- 最近邻(K)搜索
+		for (int j = 0; j < pts3d.size(); ++j)
+		{
+			if (j != i)
+			{
+				neighbors.push(make_pair(pt3d, pts3d[j]));
+			}
+		}
+
+		// 取出距离最小的top K
+		std::vector<Pt3DPly> neighs(K);
+		for (int k = 0; k < K; ++k)
+		{
+			const pair<Pt3DPly, Pt3DPly>& neighbor = neighbors.top();
+			neighs[k] = neighbor.second;  // 取出来放进neighs数组
+
+			//// 验证距离...
+			//double dist = sqrt((neighs[k].x - pt3d.x) * (neighs[k].x - pt3d.x)
+			//+ (neighs[k].y - pt3d.y) * (neighs[k].y - pt3d.y)
+			//+ (neighs[k].z - pt3d.z) * (neighs[k].z - pt3d.z));
+			//printf("Dist : %.3f\n", dist);
+
+			neighbors.pop();
+		}
+		//printf("Nearest %d neighbor of 3D point %d computed.\n", K, i);
+
+		// 平面拟合
+		double normal[3] = { 0.0 };
+		PCAFitPlane(neighs, normal);
+
+		normals[i].x = normal[0];
+		normals[i].y = normal[1];
+		normals[i].z = normal[2];
+	}
+
+	return 0;
+}
 
 // 点云法向量估计 
-int estimate_normal(const vector<Point3d>& pts3d,
+int estimate_normals(const vector<Point3d>& pts3d,
 	const int K,  // top K
 	vector<Point3d>& normals)
 {
@@ -575,6 +598,96 @@ int estimate_normal(const vector<Point3d>& pts3d,
 }
 
 int PCAFitPlane(const vector<Point3d>& pts3d, double* normal)
+{
+	double ave_x = 0.0f, ave_y = 0.0f, ave_z = 0.0f;
+	for (auto pt : pts3d)
+	{
+		ave_x += pt.x;
+		ave_y += pt.y;
+		ave_z += pt.z;
+	}
+	ave_x /= double(pts3d.size());
+	ave_y /= double(pts3d.size());
+	ave_z /= double(pts3d.size());
+
+	// 求协方差矩阵A
+	Eigen::Matrix3d A;
+	double sum_xx = 0.0f, sum_yy = 0.0f, sum_zz = 0.0f,
+		sum_xy = 0.0f, sum_xz = 0.0f, sum_yz = 0.0f;
+	for (auto pt : pts3d)
+	{
+		sum_xx += (pt.x - ave_x) * (pt.x - ave_x);
+		sum_yy += (pt.y - ave_y) * (pt.y - ave_y);
+		sum_zz += (pt.z - ave_z) * (pt.z - ave_z);
+
+		sum_xy += (pt.x - ave_x) * (pt.y - ave_y);
+		sum_xz += (pt.x - ave_x) * (pt.z - ave_z);
+		sum_yz += (pt.y - ave_y) * (pt.z - ave_z);
+	}
+	A(0, 0) = sum_xx / double(pts3d.size());  // 其实, 没必要求均值
+	A(0, 1) = sum_xy / double(pts3d.size());
+	A(0, 2) = sum_xz / double(pts3d.size());
+	A(1, 0) = sum_xy / double(pts3d.size());
+	A(1, 1) = sum_yy / double(pts3d.size());
+	A(1, 2) = sum_yz / double(pts3d.size());
+	A(2, 0) = sum_xz / double(pts3d.size());
+	A(2, 1) = sum_yz / double(pts3d.size());
+	A(2, 2) = sum_zz / double(pts3d.size());
+
+	// 求协方差矩阵A的特征值和特征向量
+	Eigen::EigenSolver<Eigen::Matrix3d> ES(A);
+	Eigen::MatrixXcd eigen_vals = ES.eigenvalues();
+	Eigen::MatrixXcd eigen_vects = ES.eigenvectors();
+	Eigen::MatrixXd eis = eigen_vals.real();
+	Eigen::MatrixXd vects = eigen_vects.real();
+
+	// 求最小特征值对应的特征向量
+	Eigen::MatrixXf::Index min_idx, max_idx;
+	eis.rowwise().sum().minCoeff(&min_idx);
+	eis.rowwise().sum().maxCoeff(&max_idx);
+
+	// ----- 对特征值(特征向量)排序：从小到大
+	int mid_idx = 0;
+	if (0 == (int)min_idx)
+	{
+		mid_idx = max_idx == 1 ? 2 : 1;
+	}
+	else if (1 == (int)min_idx)
+	{
+		mid_idx = max_idx == 0 ? 2 : 0;
+	}
+	else
+	{
+		mid_idx = max_idx == 0 ? 1 : 0;
+	}
+
+	// 最小特征值对用的特征向量
+	double& a = vects(0, min_idx);
+	double& b = vects(1, min_idx);
+	double& c = vects(2, min_idx);
+
+	// 确定正确的法向方向: 确保normal指向camera
+	if (a * ave_x + b * ave_y + c * ave_z > 0.0f)
+	{
+		a = -a;
+		b = -b;
+		c = -c;
+	}
+
+	// 最小特征向量(法向量)L2归一化
+	const double DENOM = sqrt(a*a + b * b + c * c);
+	a /= DENOM;
+	b /= DENOM;
+	c /= DENOM;
+	double plane_normal[3] = { a, b, c };
+
+	// 返回平面法向量
+	memcpy(normal, plane_normal, sizeof(double) * 3);
+
+	return 0;
+}
+
+int PCAFitPlane(const vector<Pt3DPly>& pts3d, double * normal)
 {
 	double ave_x = 0.0f, ave_y = 0.0f, ave_z = 0.0f;
 	for (auto pt : pts3d)
@@ -1185,4 +1298,170 @@ int getAllFiles(const string& path, const string& format, vector<string>& files)
 	}
 
 	return int(files.size());
+}
+
+// --------------------
+
+int main(int argc, char** argv)
+{
+	vector<string> img_names;
+	const std::string img_dir = std::string(argv[1]);
+	const string format = std::string(".jpg");  // .jpg .png
+	const int N_files = getAllFiles(img_dir, format, img_names);
+	printf("Total %d image files.\n", N_files);
+
+	// 相机内参家矩阵
+	//Mat K(Matx33d(
+	//	2759.48, 0, 1520.69,
+	//	0, 2764.16, 1006.81,
+	//	0, 0, 1));
+	Mat K(Matx33d(
+		2526.561, 0, 1835.259,
+		0, 2826.519, 1370.103,
+		0, 0, 1));
+
+	// TODO: 如何读取图片metadata, 并构建相机内参矩阵K...
+
+	vector<vector<cv::KeyPoint>> kpts_for_all;
+	vector<Mat> descriptor_for_all;
+	vector<vector<Vec3b>> colors_for_all;
+	vector<vector<DMatch>> matches_for_all;
+
+	// 提取所有图像的特征
+	extract_features(img_names, kpts_for_all, descriptor_for_all, colors_for_all);
+
+	// 对所有图像进行顺次的特征匹配
+	match_features(descriptor_for_all, matches_for_all);
+
+	vector<Point3d> structure;
+	vector<vector<int>> correspond_struct_idx;	// 保存第i副图像中第j特征点对应的structure中3D点的索引
+	vector<Vec3b> colors;  // 3个字节表示一个RGB或BGR颜色
+	vector<Mat> rotations;  // 旋转矩阵数组
+	vector<Mat> translations;  // 平移向量数组
+
+	// 初始化结构(三维点云)前两帧
+	printf("\nConstruct from the first two frames...\n");
+	const int ret = init_structure(
+		K,
+		kpts_for_all,
+		colors_for_all,
+		matches_for_all,
+		structure,
+		correspond_struct_idx,
+		colors,
+		rotations,
+		translations
+	);
+
+	// 增量方式重建剩余的图像
+	printf("\nIncremental SFM...\n");
+	for (int i = 1; i < matches_for_all.size(); ++i)  // 遍历剩余匹配
+	{
+		vector<Point3f> obj_pts;  // 3D点
+		vector<Point2f> img_pts;  // 2D点
+		Mat r, R, T;
+
+		// 获取第i副图像中匹配点对应的三维点，以及在第i+1副图像中对应的像素点
+		get_obj_pts_and_img_pts(
+			matches_for_all[i],  // 第i个匹配: 第i帧和第i+1帧的匹配
+			correspond_struct_idx[i],
+			structure,
+			kpts_for_all[i + 1],
+			obj_pts,
+			img_pts
+		);
+
+		// 求解当前帧(第i+1帧)的相机位姿(变换矩阵[R|T])
+		if (obj_pts.size() < 4 || img_pts.size() < 4)
+		{
+			printf("[Warning]: too few 3D-2D point pairs for frame %d.\n", i);
+			continue;
+		}
+		const bool& ret = cv::solvePnPRansac(obj_pts, img_pts, K, cv::noArray(), r, T);
+
+		// 将旋转向量转换为旋转矩阵
+		cv::Rodrigues(r, R);  // CV提供用于旋转向量与旋转矩阵相互转换的函数
+
+		// 保存当前帧的变换矩阵
+		rotations.push_back(R);  // 第i+1帧的旋转矩阵
+		translations.push_back(T);  // 第i+1帧的平移向量
+
+		// 获取第i帧和第i+1帧的匹配特征点
+		vector<Point2f> pts2d_1, pts2d_2;
+		vector<Vec3b> colors_1, colors_2;
+		get_matched_points(kpts_for_all[i],
+			kpts_for_all[i + 1],
+			matches_for_all[i],
+			pts2d_1, pts2d_2);
+		get_matched_colors(colors_for_all[i],
+			colors_for_all[i + 1],
+			matches_for_all[i],
+			colors_1, colors_2);
+
+		// 根据之前求得的R, T进行三维重建
+		vector<Point3d> next_structure;
+		reconstruct(K, rotations[i], translations[i], R, T, pts2d_1, pts2d_2, next_structure);
+		printf("Frame %d reconstructed.\n", i);
+
+		//将新的重建3D点云与已经重建的3D点云进行融合
+		fuse_structure(
+			matches_for_all[i],
+			correspond_struct_idx[i],
+			correspond_struct_idx[i + 1],
+			structure,
+			next_structure,
+			colors,
+			colors_1
+		);
+		printf("Frame %d point cloud fused, total %d points now.\n", i, (int)structure.size());
+	}
+
+	// 保存优化前的结果
+	save_structure("../Viewer/structure.yml", rotations, translations, structure, colors);
+
+	// 捆绑调整(优化)
+	printf("\nBundle adjustment fo SFM...\n");
+	Mat intrinsic(Matx41d(K.at<double>(0, 0), K.at<double>(1, 1), K.at<double>(0, 2), K.at<double>(1, 2)));
+	cout << "intrinsic:\n" << intrinsic << endl;
+	vector<Mat> extrinsics;  // 外参向量数组
+	for (size_t i = 0; i < rotations.size(); ++i)
+	{
+		Mat extrinsic(6, 1, CV_64FC1);
+		Mat r;
+		Rodrigues(rotations[i], r);
+
+		r.copyTo(extrinsic.rowRange(0, 3));  // 前三项是旋转向量
+		translations[i].copyTo(extrinsic.rowRange(3, 6));  // 后三项是平移向量
+
+		// 添加外参向量
+		extrinsics.push_back(extrinsic);
+	}
+
+	// do bundle adjustment
+	bundle_adjustment(intrinsic, extrinsics, correspond_struct_idx, kpts_for_all, structure);
+
+	// 法向量估计
+	vector<Point3d> normals(structure.size());
+	estimate_normals(structure, 10, normals);
+
+	// 保存优化后的结果
+	save_structure("../Viewer/structure_ba.yml", rotations, translations, structure, colors);
+	printf("structure_ba.yml saved.\n");
+
+	printf("Saving structure to ply...\n");
+	vector<Pt3DPly> pts3dply;
+	get_ply_pts3d(structure, normals, colors, pts3dply);
+	write_ply_binary(string("../Viewer/structure_ba.ply"), pts3dply);
+	printf("../Viewer/structure_ba.ply saved.\n");
+
+	cout << "Save structure done." << endl;
+
+	read_bundler_write_ply("E:/CppProjs/OpencvSFM/dataset/desktop/desktop.ply",
+		"E:/CppProjs/OpencvSFM/dataset/desktop/",
+		"E:/CppProjs/OpencvSFM/dataset/desktop/desktop.out",
+		"E:/CppProjs/OpencvSFM/dataset/desktop/desktop.txt");
+
+	getchar();
+
+	return 0;
 }
