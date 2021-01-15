@@ -105,7 +105,7 @@ void extract_features(
 	vector <vector<Vec3b>>& colors_for_all
 );
 void match_features(const Mat& query, const Mat& train, vector<DMatch>& matches);
-void match_features(const vector<Mat>& descriptor_for_all, vector<vector<DMatch>>& matches_for_all);
+void match_features_for_all(const vector<Mat>& descriptor_for_all, vector<vector<DMatch>>& matches_for_all);
 void save_structure(string file_name,
 	vector<Mat>& rotations,
 	vector<Mat>& motions,
@@ -842,20 +842,25 @@ void extract_features(
 	}
 }
 
-void match_features(const vector<Mat>& descriptor_for_all, vector<vector<DMatch>>& matches_for_all)
+void match_features_for_all(const vector<Mat>& descriptor_for_all,
+	vector<vector<DMatch>>& matches_for_all)
 {
 	matches_for_all.clear();
+
 	// n个图像，两两顺次有 n-1 对匹配
 	// 1与2匹配，2与3匹配，3与4匹配，以此类推
 	for (int i = 0; i < descriptor_for_all.size() - 1; ++i)
 	{
 		cout << "Matching images " << i << " - " << i + 1 << endl;
+
 		vector<DMatch> matches;
 		match_features(descriptor_for_all[i], descriptor_for_all[i + 1], matches);
+
 		if (matches.size() == 0)
 		{
 			printf("[Warning]: zero matches between %d and %d.\n", i, i + 1);
 		}
+
 		matches_for_all.push_back(matches);
 	}
 }
@@ -1345,7 +1350,7 @@ int main(int argc, char** argv)
 	extract_features(img_names, kpts_for_all, descriptor_for_all, colors_for_all);
 
 	// 对所有图像进行顺次的特征匹配
-	match_features(descriptor_for_all, matches_for_all);
+	match_features_for_all(descriptor_for_all, matches_for_all);
 
 	vector<Point3d> structure;
 	vector<vector<int>> correspond_struct_idx;	// 保存第i副图像中第j特征点对应的structure中3D点的索引
