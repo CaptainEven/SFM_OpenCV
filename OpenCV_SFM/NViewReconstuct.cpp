@@ -789,7 +789,7 @@ void extract_features(
 	Mat img;
 
 	// 读取图像，获取图像特征点并保存
-	Ptr<Feature2D> sift = cv::SIFT::create();
+	Ptr<Feature2D> feature_extractor = cv::SIFT::create();  // cv::AKAZE::create();
 	for (auto it = image_names.begin(); it != image_names.end(); ++it)
 	{
 		// 读取图像
@@ -798,20 +798,24 @@ void extract_features(
 		{
 			continue;
 		}
-		cout << "Extracting features: " << *it << endl;
+		cout << "Extracting features for image " << *it << "..." << endl;
 
 		vector<KeyPoint> key_points;
 		Mat descriptor;
 
 		// 偶尔出现内存分配失败的错误  Detects keypoints and computes the descriptors
-		// sift->detectAndCompute(image, noArray(), key_points, descriptor);
-		sift->detect(img, key_points);
-		sift->compute(img, key_points, descriptor);
+		// feature_extractor->detectAndCompute(image, noArray(), key_points, descriptor);
+		feature_extractor->detect(img, key_points);
+		feature_extractor->compute(img, key_points, descriptor);
 
 		// 特征点过少，则排除该图像
 		if (key_points.size() <= 10)
 		{
 			continue;
+		}
+		else
+		{
+			printf("%zd 2D feature point detected.\n", key_points.size());
 		}
 
 		key_points_for_all.push_back(key_points);
@@ -940,7 +944,7 @@ int init_structure(
 	motions = { T0, T };
 
 	// 将correspond_struct_idx的大小初始化为与key_points_for_all完全一致
-	correspond_struct_idx.clear();  // 通过keypoint索引3D点的索引
+	correspond_struct_idx.clear();  // 通过2D keypoint索引3D点的索引
 	correspond_struct_idx.resize(key_points_for_all.size());  // N frames
 	for (size_t fr_i = 0; fr_i < key_points_for_all.size(); ++fr_i)
 	{
@@ -948,7 +952,7 @@ int init_structure(
 		correspond_struct_idx[fr_i].resize(key_points_for_all[fr_i].size(), -1);
 	}
 
-	// 填写前两帧的结构索引
+	// 填写前两帧(frame 0 and frame 1)的结构索引
 	const vector<DMatch>& matches = matches_for_all[0];  //total (N-1) matches for N frames
 
 	int idx = 0;
@@ -1008,11 +1012,11 @@ bool find_transform(const Mat& K,
 	Mat& mask)
 {
 	// 根据内参数矩阵获取相机的焦距和光心坐标(主点坐标)
-	double focal_length = 0.5 * (K.at<double>(0) + K.at<double>(4));
-	Point2d principle_point(K.at<double>(2), K.at<double>(5));
+	const double focal_length = 0.5 * (K.at<double>(0) + K.at<double>(4));
+	const Point2d principle_point(K.at<double>(2), K.at<double>(5));
 
-	// 根据匹配点求取本征矩阵，使用RANSAC，进一步排除失配点
-	const Mat& E = findEssentialMat(p1, p2, focal_length, principle_point, RANSAC, 0.999, 1.0, mask);
+	// 根据匹配点求取本征矩阵，使用RANSAC，进一步排除失配点: 内参相同
+	const Mat& E = cv::findEssentialMat(p1, p2, focal_length, principle_point, RANSAC, 0.999, 1.0, mask);
 	if (E.empty())
 	{
 		return false;
@@ -1027,7 +1031,7 @@ bool find_transform(const Mat& K,
 		return false;
 	}
 
-	// 分解本征矩阵，获取相对变换
+	// 分解本征矩阵，获取相对变换: 内参相同
 	int pass_count = cv::recoverPose(E, p1, p2, R, T, focal_length, principle_point, mask);
 
 	// cout << "pass_count = " << pass_count << endl;
@@ -1037,6 +1041,7 @@ bool find_transform(const Mat& K,
 	{
 		return false;
 	}
+
 	return true;
 }
 
@@ -1061,7 +1066,9 @@ void maskout_2d_pts_pair(const Mat& mask, vector<Point2f>& pts1, vector<Point2f>
 
 	pts1.clear();
 	pts2.clear();
-	pts1.reserve(pts1_copy.size());  // 预先分配好内存，避免push_back阶段多次分配内存
+
+	// 预先分配好内存，避免push_back阶段多次分配内存
+	pts1.reserve(pts1_copy.size());  
 	pts2.reserve(pts2_copy.size());
 
 	for (int i = 0; i < mask.rows; i++)
@@ -1070,6 +1077,10 @@ void maskout_2d_pts_pair(const Mat& mask, vector<Point2f>& pts1, vector<Point2f>
 		{
 			pts1.push_back(pts1_copy[i]);
 			pts2.push_back(pts2_copy[i]);
+		}
+		else
+		{
+			printf("2D point id %d is masked out.\n", i);
 		}
 	}
 }
@@ -1125,9 +1136,9 @@ int reconstruct(const Mat& K,
 	structure.reserve(pts4d.cols);  // 预先分配好内存, 避免内存多次分配
 	for (int i = 0; i < pts4d.cols; ++i)
 	{
-		const Mat_<float>& pt3d_homo = pts4d.col(i);
-		pt3d_homo /= pt3d_homo(3);	// 齐次坐标———>非齐次坐标
-		structure.push_back(Point3f(pt3d_homo(0), pt3d_homo(1), pt3d_homo(2)));
+		const Mat_<float>& pt4d_homo = pts4d.col(i);  // 每一列代表一个点
+		pt4d_homo /= pt4d_homo(3);	// 齐次坐标———>非齐次坐标
+		structure.push_back(Point3f(pt4d_homo(0), pt4d_homo(1), pt4d_homo(2)));
 	}
 
 	return 0;
@@ -1239,7 +1250,9 @@ void get_obj_pts_and_img_pts(
 		}
 
 		object_points.push_back(structure[struct_idx]);
-		image_points.push_back(key_points[train_idx].pt);  // train中对应关键点的坐标 二维
+
+		// train中对应关键点的坐标(2D)
+		image_points.push_back(key_points[train_idx].pt);  
 	}
 }
 
@@ -1316,7 +1329,7 @@ int main(int argc, char** argv)
 	//	0, 2764.16, 1006.81,
 	//	0, 0, 1));
 	Mat K(Matx33d(
-		2526.561, 0, 1835.259,
+		2826.561, 0, 1835.259,
 		0, 2826.519, 1370.103,
 		0, 0, 1));
 
@@ -1456,10 +1469,10 @@ int main(int argc, char** argv)
 
 	cout << "Save structure done." << endl;
 
-	read_bundler_write_ply("E:/CppProjs/OpencvSFM/dataset/desktop/desktop.ply",
-		"E:/CppProjs/OpencvSFM/dataset/desktop/",
-		"E:/CppProjs/OpencvSFM/dataset/desktop/desktop.out",
-		"E:/CppProjs/OpencvSFM/dataset/desktop/desktop.txt");
+	//read_bundler_write_ply("E:/CppProjs/OpencvSFM/dataset/desktop/desktop.ply",
+	//	"E:/CppProjs/OpencvSFM/dataset/desktop/",
+	//	"E:/CppProjs/OpencvSFM/dataset/desktop/desktop.out",
+	//	"E:/CppProjs/OpencvSFM/dataset/desktop/desktop.txt");
 
 	getchar();
 
