@@ -900,6 +900,7 @@ void match_features(const Mat& query, const Mat& train, vector<DMatch>& matches)
 	}
 }
 
+// 对前两帧图像进行三维重建
 int init_structure(
 	const Mat& K,
 	const vector<vector<KeyPoint>>& key_points_for_all,  // 每一帧提取的特征点
@@ -924,13 +925,13 @@ int init_structure(
 	find_transform(K, pts2d_1, pts2d_2, R, T, mask);
 	//printf("mask type: %d\n", mask.type());  // mask: CV_8U(uint8)
 
-	// 对头两幅图像进行三维重建
-	//maskout_points(mask, p1);
-	//maskout_points(mask, p2);
+	// ---------- 排除匹配不正确的点: 依据mask
+	//// maskout_points(mask, p1);
+	//// maskout_points(mask, p2);
 	maskout_2d_pts_pair(mask, pts2d_1, pts2d_2);
 	maskout_colors(mask, colors);
 
-	// 前两帧三角化
+	// 前两帧三角测量得到前两帧的3D点: 依据有效的2D特征匹配点
 	Mat R0 = Mat::eye(3, 3, CV_64FC1);
 	Mat T0 = Mat::zeros(3, 1, CV_64FC1);
 	const int ret = reconstruct(K, R0, T0, R, T, pts2d_1, pts2d_2, structure);
@@ -940,7 +941,7 @@ int init_structure(
 	}
 
 	// 保存变换矩阵
-	rotations = { R0, R };
+	rotations = { R0, R };  // 初始化
 	motions = { T0, T };
 
 	// 将correspond_struct_idx的大小初始化为与key_points_for_all完全一致
@@ -952,7 +953,7 @@ int init_structure(
 		correspond_struct_idx[fr_i].resize(key_points_for_all[fr_i].size(), -1);
 	}
 
-	// 填写前两帧(frame 0 and frame 1)的结构索引
+	// 填写前两帧(frame 0 and frame 1)的结构索引: 2D特征点索引 ——> 3D点索引
 	const vector<DMatch>& matches = matches_for_all[0];  //total (N-1) matches for N frames
 
 	int idx = 0;
@@ -963,7 +964,7 @@ int init_structure(
 			continue;
 		}
 
-		// 如果两个点对应的idx相等,表明它们是同一特征点 idx 就是structure中对应的空间点坐标索引
+		// 如果两个点对应的idx相等, 表明它们是同一特征点, idx就是structure中对应的空间点坐标索引
 		correspond_struct_idx[0][matches[i].queryIdx] = idx;
 		correspond_struct_idx[1][matches[i].trainIdx] = idx;
 		++idx;
@@ -1061,21 +1062,21 @@ void maskout_points(const Mat& mask, vector<Point2f>& p1)
 
 void maskout_2d_pts_pair(const Mat& mask, vector<Point2f>& pts1, vector<Point2f>& pts2)
 {
-	vector<Point2f> pts1_copy = pts1;
+	vector<Point2f> pts1_copy = pts1;  // 拷贝赋值(左值)
 	vector<Point2f> pts2_copy = pts2;
 
 	pts1.clear();
 	pts2.clear();
 
 	// 预先分配好内存，避免push_back阶段多次分配内存
-	pts1.reserve(pts1_copy.size());  
+	pts1.reserve(pts1_copy.size());
 	pts2.reserve(pts2_copy.size());
 
 	for (int i = 0; i < mask.rows; i++)
 	{
 		if (mask.at<uchar>(i) > 0)
 		{
-			pts1.push_back(pts1_copy[i]);
+			pts1.push_back(pts1_copy[i]);  // 基于mask: size++
 			pts2.push_back(pts2_copy[i]);
 		}
 		else
@@ -1252,7 +1253,7 @@ void get_obj_pts_and_img_pts(
 		object_points.push_back(structure[struct_idx]);
 
 		// train中对应关键点的坐标(2D)
-		image_points.push_back(key_points[train_idx].pt);  
+		image_points.push_back(key_points[train_idx].pt);
 	}
 }
 
