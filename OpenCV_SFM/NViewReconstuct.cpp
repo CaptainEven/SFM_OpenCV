@@ -557,6 +557,7 @@ int estimate_normals(const vector<Point3d>& pts3d,
 		// 当前处理3D点
 		const Point3d& pt3d = pts3d[i];
 
+		// 使用优先队列构建大顶堆
 		priority_queue<pair<Point3d, Point3d>, vector<pair<Point3d, Point3d>>, Pt3dDist> neighbors;
 
 		// ----- 最近邻(K)搜索
@@ -624,6 +625,7 @@ int PCAFitPlane(const vector<Point3d>& pts3d, double* normal)
 		sum_xz += (pt.x - ave_x) * (pt.z - ave_z);
 		sum_yz += (pt.y - ave_y) * (pt.z - ave_z);
 	}
+
 	A(0, 0) = sum_xx / double(pts3d.size());  // 其实, 没必要求均值
 	A(0, 1) = sum_xy / double(pts3d.size());
 	A(0, 2) = sum_xz / double(pts3d.size());
@@ -714,6 +716,7 @@ int PCAFitPlane(const vector<Pt3DPly>& pts3d, double * normal)
 		sum_xz += (pt.x - ave_x) * (pt.z - ave_z);
 		sum_yz += (pt.y - ave_y) * (pt.z - ave_z);
 	}
+
 	A(0, 0) = sum_xx / double(pts3d.size());  // 其实, 没必要求均值
 	A(0, 1) = sum_xy / double(pts3d.size());
 	A(0, 2) = sum_xz / double(pts3d.size());
@@ -777,6 +780,8 @@ int PCAFitPlane(const vector<Pt3DPly>& pts3d, double * normal)
 	return 0;
 }
 
+
+// AKAZE特征对应NORM_HAMMING2距离作为特征提取和匹配方式
 void extract_features(
 	vector<string>& image_names,
 	vector<vector<KeyPoint>>& key_points_for_all,
@@ -789,11 +794,11 @@ void extract_features(
 	Mat img;
 
 	// 读取图像，获取图像特征点并保存
-	Ptr<Feature2D> feature_extractor = cv::SIFT::create();  // cv::AKAZE::create();
+	Ptr<Feature2D> feature_extractor = cv::AKAZE::create();  // cv::AKAZE::create(), cv::SIFT::create()
 	for (auto it = image_names.begin(); it != image_names.end(); ++it)
 	{
 		// 读取图像
-		img = imread(*it);
+		img = cv::imread(*it);
 		if (img.empty())
 		{
 			continue;
@@ -868,7 +873,7 @@ void match_features_for_all(const vector<Mat>& descriptor_for_all,
 void match_features(const Mat& query, const Mat& train, vector<DMatch>& matches)
 {
 	vector<vector<DMatch>> knn_matches;
-	BFMatcher matcher(NORM_L2);
+	BFMatcher matcher(cv::NORM_HAMMING2);  // NORM_HAMMING, NORM_HAMMING2
 	matcher.knnMatch(query, train, knn_matches, 2);  // 取top2匹配最好的匹配
 
 	// 获取满足Ratio Test的最小匹配的距离
@@ -1028,7 +1033,7 @@ bool find_transform(const Mat& K,
 		return false;
 	}
 
-	double feasible_count = countNonZero(mask);	// 得到非零元素，即数组中的有效点
+	const double feasible_count = countNonZero(mask);	// 得到非零元素，即数组中的有效点
 	// cout << (int)feasible_count << " - in - " << p1.size() << endl;
 
 	// 对于RANSAC而言，outlier数量大于50%时，结果是不可靠的
@@ -1038,9 +1043,10 @@ bool find_transform(const Mat& K,
 	}
 
 	// 分解本征矩阵，获取相对变换: 内参相同
-	int pass_count = cv::recoverPose(E, p1, p2, R, T, focal_length, principle_point, mask);
-
+	const int pass_count = cv::recoverPose(E, p1, p2, R, T, focal_length, principle_point, mask);
 	// cout << "pass_count = " << pass_count << endl;
+	cout << "Init R:\n" << R << "\n";
+	cout << "Init T:\n" << T << "\n";
 
 	// 同时位于两个相机前方的点的数量要足够大
 	if (((double)pass_count) / feasible_count < 0.7)
@@ -1086,7 +1092,7 @@ void maskout_2d_pts_pair(const Mat& mask, vector<Point2f>& pts1, vector<Point2f>
 		}
 		else
 		{
-			printf("2D point id %d is masked out.\n", i);
+			//printf("2D point id %d is masked out.\n", i);
 		}
 	}
 }
@@ -1226,8 +1232,8 @@ void bundle_adjustment(
 			<< "Bundle Adjustment statistics (approximated RMSE):\n"
 			<< " #views: " << extrinsics.size() << "\n"
 			<< " #residuals: " << summary.num_residuals << "\n"
-			<< " Initial RMSE: " << std::sqrt(summary.initial_cost / summary.num_residuals) << "\n"
-			<< " Final RMSE: " << std::sqrt(summary.final_cost / summary.num_residuals) << "\n"
+			<< " Initial RMSE(pixel): " << std::sqrt(summary.initial_cost / summary.num_residuals) << "\n"
+			<< " Final   RMSE(pixel): " << std::sqrt(summary.final_cost / summary.num_residuals) << "\n"
 			<< " Time (s): " << summary.total_time_in_seconds << "\n"
 			<< std::endl;
 	}
@@ -1400,6 +1406,9 @@ int main(int argc, char** argv)
 
 		// 将旋转向量转换为旋转矩阵
 		cv::Rodrigues(r, R);  // CV提供用于旋转向量与旋转矩阵相互转换的函数
+
+		cout << "R:\n" << R << "\n";
+		cout << "T:\n" << T << "\n";
 
 		// 保存当前帧的变换矩阵
 		rotations.push_back(R);  // 第i+1帧的旋转矩阵
