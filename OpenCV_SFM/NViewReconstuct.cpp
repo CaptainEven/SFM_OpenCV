@@ -897,10 +897,8 @@ void match_features(const Mat& query, const Mat& train, vector<DMatch>& matches)
 	for (size_t i = 0; i < knn_matches.size(); ++i)
 	{
 		// 排除不满足Ratio Test的点和匹配距离过大的点
-		if (
-			knn_matches[i][0].distance > 0.6 * knn_matches[i][1].distance ||
-			knn_matches[i][0].distance > 5 * max(min_dist, 10.0f)
-			)
+		if (knn_matches[i][0].distance > 0.6 * knn_matches[i][1].distance
+			|| knn_matches[i][0].distance > 5 * max(min_dist, 10.0f))
 		{
 			continue;
 		}
@@ -908,6 +906,10 @@ void match_features(const Mat& query, const Mat& train, vector<DMatch>& matches)
 		// 保存匹配点
 		matches.push_back(knn_matches[i][0]);
 	}
+
+	// TODO: 互惠滤波器...
+
+	// TODO: 对极几何约束滤波器...
 }
 
 // 对前两帧图像进行三维重建
