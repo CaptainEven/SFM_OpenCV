@@ -32,7 +32,7 @@ struct Pt3DPly
 };
 
 // --------------------
-int getAllFiles(const string& path, const string& format, vector<string>& files);
+int get_files_format(const string& path, const string& format, vector<string>& files);
 
 
 int init_structure(
@@ -576,7 +576,7 @@ int estimate_normals(const vector<Point3d>& pts3d,
 			const pair<Point3d, Point3d>& neighbor = neighbors.top();
 			neighs[k] = neighbor.second;  // 取出来放进neighs数组
 
-			//// 验证距离...
+			//// 验证距离排序是否正确...
 			//double dist = sqrt((neighs[k].x - pt3d.x) * (neighs[k].x - pt3d.x)
 			//+ (neighs[k].y - pt3d.y) * (neighs[k].y - pt3d.y)
 			//+ (neighs[k].z - pt3d.z) * (neighs[k].z - pt3d.z));
@@ -1042,7 +1042,7 @@ bool find_transform(const Mat& K,
 		return false;
 	}
 
-	// 分解本征矩阵，获取相对变换: 内参相同
+	// 分解本征矩阵E=t^R得到位姿[R|t]，获取相对变换: 内参相同
 	const int pass_count = cv::recoverPose(E, p1, p2, R, T, focal_length, principle_point, mask);
 	// cout << "pass_count = " << pass_count << endl;
 	cout << "Init R:\n" << R << "\n";
@@ -1156,13 +1156,13 @@ int reconstruct(const Mat& K,
 	return 0;
 }
 
+// 捆绑调整: BA优化
 void bundle_adjustment(
 	Mat& intrinsic,
 	vector<Mat>& extrinsics,
-	vector<vector<int>>& correspond_struct_idx,
+	vector<vector<int>>& inds_2d_to_3d,
 	vector<vector<KeyPoint>>& key_points_for_all,
-	vector<Point3d>& structure
-)
+	vector<Point3d>& pts3d)
 {
 	ceres::Problem problem;
 
@@ -1182,19 +1182,19 @@ void bundle_adjustment(
 	ceres::LossFunction* loss_function = new ceres::HuberLoss(4);
 
 	// load points
-	for (size_t img_idx = 0; img_idx < correspond_struct_idx.size(); ++img_idx)
+	for (size_t img_idx = 0; img_idx < inds_2d_to_3d.size(); ++img_idx)
 	{
-		vector<int>& point3d_ids = correspond_struct_idx[img_idx];
+		vector<int>& pt3d_ids = inds_2d_to_3d[img_idx];
 		vector<KeyPoint>& key_points = key_points_for_all[img_idx];
-		for (size_t point_idx = 0; point_idx < point3d_ids.size(); ++point_idx)
+		for (size_t pt_id = 0; pt_id < pt3d_ids.size(); ++pt_id)
 		{
-			int point3d_id = point3d_ids[point_idx];
-			if (point3d_id < 0)
+			const int& pt3d_id = pt3d_ids[pt_id];
+			if (pt3d_id < 0)
 			{
 				continue;
 			}
 
-			Point2d observed = key_points[point_idx].pt;
+			Point2d observed = key_points[pt_id].pt;
 
 			// 模板参数中，第一个为代价函数的类型，第二个为代价的维度，剩下三个分别为代价函数第一第二还有第三个参数的维度
 			ceres::CostFunction* cost_function = new ceres::AutoDiffCostFunction<ReprojectCost, 2, 4, 6, 3>(new ReprojectCost(observed));
@@ -1204,7 +1204,7 @@ void bundle_adjustment(
 				loss_function,
 				intrinsic.ptr<double>(),			// Intrinsic
 				extrinsics[img_idx].ptr<double>(),	// View Rotation and Translation
-				&(structure[point3d_id].x)			// Point in 3D space
+				&(pts3d[pt3d_id].x)			// Point in 3D space
 			);
 		}
 	}
@@ -1237,6 +1237,8 @@ void bundle_adjustment(
 			<< " Time (s): " << summary.total_time_in_seconds << "\n"
 			<< std::endl;
 	}
+
+	//delete loss_function;
 }
 
 void get_obj_pts_and_img_pts(
@@ -1297,7 +1299,7 @@ void fuse_structure(
 }
 
 //获取特定格式的文件名    
-int getAllFiles(const string& path, const string& format, vector<string>& files)
+int get_files_format(const string& path, const string& format, vector<string>& files)
 {
 	intptr_t hFile = 0;  // 文件句柄  64位下long 改为 intptr_t
 	struct _finddata_t fileinfo;  // 文件信息 
@@ -1311,7 +1313,7 @@ int getAllFiles(const string& path, const string& format, vector<string>& files)
 				if (strcmp(fileinfo.name, ".") != 0 && strcmp(fileinfo.name, "..") != 0)  // 文件夹名中不含"."和".."
 				{
 					files.push_back(p.assign(path).append("\\").append(fileinfo.name));  // 保存文件夹名
-					getAllFiles(p.assign(path).append("\\").append(fileinfo.name), format, files);  // 递归遍历文件夹
+					get_files_format(p.assign(path).append("\\").append(fileinfo.name), format, files);  // 递归遍历文件夹
 				}
 			}
 			else
@@ -1330,9 +1332,15 @@ int getAllFiles(const string& path, const string& format, vector<string>& files)
 int main(int argc, char** argv)
 {
 	vector<string> img_names;
+	if (std::string(argv[1]).empty())
+	{
+		printf("[Warning]: empty dataset path.\n");
+		return 0;
+	}
+
 	const std::string img_dir = std::string(argv[1]);
 	const string format = std::string(".jpg");  // .jpg .png
-	const int N_files = getAllFiles(img_dir, format, img_names);
+	const int N_files = get_files_format(img_dir, format, img_names);
 	printf("Total %d image files.\n", N_files);
 
 	// 相机内参家矩阵
@@ -1358,8 +1366,8 @@ int main(int argc, char** argv)
 	// 对所有图像进行顺次的特征匹配
 	match_features_for_all(descriptor_for_all, matches_for_all);
 
-	vector<Point3d> structure;
-	vector<vector<int>> correspond_struct_idx;	// 保存第i副图像中第j特征点对应的structure中3D点的索引
+	vector<Point3d> pts3d;
+	vector<vector<int>> inds_2d_to_3d;	// 保存第i副图像中第j特征点对应的structure中3D点的索引
 	vector<Vec3b> colors;  // 3个字节表示一个RGB或BGR颜色
 	vector<Mat> rotations;  // 旋转矩阵数组
 	vector<Mat> translations;  // 平移向量数组
@@ -1371,8 +1379,8 @@ int main(int argc, char** argv)
 		kpts_for_all,
 		colors_for_all,
 		matches_for_all,
-		structure,
-		correspond_struct_idx,
+		pts3d,
+		inds_2d_to_3d,
 		colors,
 		rotations,
 		translations
@@ -1389,8 +1397,8 @@ int main(int argc, char** argv)
 		// 获取第i副图像中匹配点对应的三维点，以及在第i+1副图像中对应的像素点
 		get_obj_pts_and_img_pts(
 			matches_for_all[i],  // 第i个匹配: 第i帧和第i+1帧的匹配
-			correspond_struct_idx[i],
-			structure,
+			inds_2d_to_3d[i],
+			pts3d,
 			kpts_for_all[i + 1],
 			obj_pts,
 			img_pts
@@ -1434,51 +1442,70 @@ int main(int argc, char** argv)
 		//将新的重建3D点云与已经重建的3D点云进行融合
 		fuse_structure(
 			matches_for_all[i],
-			correspond_struct_idx[i],
-			correspond_struct_idx[i + 1],
-			structure,
+			inds_2d_to_3d[i],
+			inds_2d_to_3d[i + 1],
+			pts3d,
 			next_structure,
 			colors,
 			colors_1
 		);
-		printf("Frame %d point cloud fused, total %d points now.\n", i, (int)structure.size());
+		printf("Frame %d point cloud fused, total %d points now.\n", i, (int)pts3d.size());
 	}
 
 	// 保存优化前的结果
-	save_structure("../Viewer/structure.yml", rotations, translations, structure, colors);
+	save_structure("../Viewer/structure.yml", rotations, translations, pts3d, colors);
 
-	// 捆绑调整(优化)
+	// ---------- 捆绑调整(优化): 这里没有考虑相机畸变的影响
 	printf("\nBundle adjustment fo SFM...\n");
-	Mat intrinsic(Matx41d(K.at<double>(0, 0), K.at<double>(1, 1), K.at<double>(0, 2), K.at<double>(1, 2)));
+
+	// 相机内参
+	Mat intrinsic(
+		Matx41d(
+			K.at<double>(0, 0),  // fx
+			K.at<double>(1, 1),  // fy
+			K.at<double>(0, 2),  // cx
+			K.at<double>(1, 2)   // cy
+		)
+	);  
 	cout << "intrinsic:\n" << intrinsic << endl;
-	vector<Mat> extrinsics;  // 外参向量数组
+
+	// 相机外参: 相机位姿
+	vector<Mat> extrinsics;  
 	for (size_t i = 0; i < rotations.size(); ++i)
 	{
 		Mat extrinsic(6, 1, CV_64FC1);
 		Mat r;
 		Rodrigues(rotations[i], r);
 
-		r.copyTo(extrinsic.rowRange(0, 3));  // 前三项是旋转向量
+		r.copyTo(extrinsic.rowRange(0, 3));                // 前三项是旋转向量
 		translations[i].copyTo(extrinsic.rowRange(3, 6));  // 后三项是平移向量
 
 		// 添加外参向量
 		extrinsics.push_back(extrinsic);
 	}
 
-	// do bundle adjustment
-	bundle_adjustment(intrinsic, extrinsics, correspond_struct_idx, kpts_for_all, structure);
+	// ---------- do bundle adjustment
+	auto pts3d_old = pts3d;  // 调用vector拷贝构造(左值)
+	bundle_adjustment(intrinsic, extrinsics, inds_2d_to_3d, kpts_for_all, pts3d);
+	// ----------
+
+	for (int i = 0; i < pts3d.size(); ++i)
+	{
+		auto offset = pts3d[i] - pts3d_old[i];
+		cout << "Point3d "  << i << " offset: " << offset << "\n";
+	}
 
 	// 法向量估计
-	vector<Point3d> normals(structure.size());
-	estimate_normals(structure, 10, normals);
+	vector<Point3d> normals(pts3d.size());
+	estimate_normals(pts3d, 10, normals);
 
 	// 保存优化后的结果
-	save_structure("../Viewer/structure_ba.yml", rotations, translations, structure, colors);
+	save_structure("../Viewer/structure_ba.yml", rotations, translations, pts3d, colors);
 	printf("structure_ba.yml saved.\n");
 
 	printf("Saving structure to ply...\n");
 	vector<Pt3DPly> pts3dply;
-	get_ply_pts3d(structure, normals, colors, pts3dply);
+	get_ply_pts3d(pts3d, normals, colors, pts3dply);
 	write_ply_binary(string("../Viewer/structure_ba.ply"), pts3dply);
 	printf("../Viewer/structure_ba.ply saved.\n");
 
