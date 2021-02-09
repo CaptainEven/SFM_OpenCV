@@ -1468,11 +1468,11 @@ int main(int argc, char** argv)
 			K.at<double>(0, 2),  // cx
 			K.at<double>(1, 2)   // cy
 		)
-	);  
+	);
 	cout << "intrinsic:\n" << intrinsic << endl;
 
 	// 相机外参: 相机位姿
-	vector<Mat> extrinsics;  
+	vector<Mat> extrinsics;
 	for (size_t i = 0; i < rotations.size(); ++i)
 	{
 		Mat extrinsic(6, 1, CV_64FC1);
@@ -1494,7 +1494,7 @@ int main(int argc, char** argv)
 	for (int i = 0; i < pts3d.size(); ++i)
 	{
 		auto offset = pts3d[i] - pts3d_old[i];
-		cout << "Point3d "  << i << " offset: " << offset << "\n";
+		cout << "Point3d " << i << " offset: " << offset << "\n";
 	}
 
 	// 法向量估计
